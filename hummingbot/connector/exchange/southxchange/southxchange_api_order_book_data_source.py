@@ -62,17 +62,9 @@ class SouthxchangeAPIOrderBookDataSource(OrderBookTrackerDataSource):
         return result
 
     @staticmethod
-    async def fetch_trading_pairs() -> List[str]:
-        resultado = {}
-        trading_pairs: List[str]
-        xx = SouthxchangeAPIOrderBookDataSource(OrderBookTrackerDataSource)
-        resultado = await xx.get_last_traded_prices(["BTC-USDT", "LTC-BTC"])
-
-
-
-
-        async with aiohttp.ClientSession() as client:
-            resp = await client.get(f"{REST_URL}/prices")
+    async def fetch_trading_pairs() -> List[str]:  
+        async with aiohttp.ClientSession() as client:            
+            resp = await client.get(f"{REST_URL}prices")            
 
             if resp.status != 200:
                 # Do nothing if the request fails -- there will be no autocomplete for kucoin trading pairs

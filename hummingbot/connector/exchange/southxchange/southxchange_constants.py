@@ -2,6 +2,6 @@
 
 
 EXCHANGE_NAME = "southxchange"
-REST_URL = "https://www.southxchange.com/api/v4"
+REST_URL = "http://localhost:6017/api/"
 WS_URL = "wss://www.southxchange.com/api/v2/connect"
 PONG_PAYLOAD = {"op": "pong"}

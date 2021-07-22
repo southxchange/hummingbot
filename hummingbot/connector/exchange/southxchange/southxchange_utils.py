@@ -19,11 +19,11 @@ HBOT_BROKER_ID = "HMBot"
 
 
 def get_rest_url_private(account_id: int) -> str:
-    return f"https://ascendex.com/{account_id}/api/pro/v1"
+    return f"https://www.southxchange.com/api/v4"
 
 
 def get_ws_url_private(account_id: int) -> str:
-    return f"wss://ascendex.com/{account_id}/api/pro/v1"
+    return f"wss://www.southxchange.com/api/v4"
 
 
 def convert_from_exchange_trading_pair(exchange_trading_pair: str) -> str:
@@ -78,16 +78,16 @@ def gen_client_order_id(is_buy: bool, trading_pair: str) -> str:
 
 
 KEYS = {
-    "ascend_ex_api_key":
-        ConfigVar(key="ascend_ex_api_key",
-                  prompt="Enter your AscendEx API key >>> ",
-                  required_if=using_exchange("ascend_ex"),
+    "southxchange_api_key":
+        ConfigVar(key="southxchange_api_key",
+                  prompt="Enter your SouthXchange API key >>> ",
+                  required_if=using_exchange("southxchange"),
                   is_secure=True,
                   is_connect_key=True),
-    "ascend_ex_secret_key":
-        ConfigVar(key="ascend_ex_secret_key",
-                  prompt="Enter your AscendEx secret key >>> ",
-                  required_if=using_exchange("ascend_ex"),
+    "southxchange_secret_key":
+        ConfigVar(key="southxchange_secret_key",
+                  prompt="Enter your SouthXchange secret key >>> ",
+                  required_if=using_exchange("southxchange"),
                   is_secure=True,
                   is_connect_key=True),
 }
