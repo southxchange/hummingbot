@@ -19,11 +19,11 @@ HBOT_BROKER_ID = "HMBot"
 
 
 def get_rest_url_private(account_id: int) -> str:
-    return f"https://www.southxchange.com/api/v4"
+    return "https://www.southxchange.com/api/v4"
 
 
 def get_ws_url_private(account_id: int) -> str:
-    return f"wss://www.southxchange.com/api/v4"
+    return "wss://www.southxchange.com/api/v4"
 
 
 def convert_from_exchange_trading_pair(exchange_trading_pair: str) -> str:
@@ -32,6 +32,10 @@ def convert_from_exchange_trading_pair(exchange_trading_pair: str) -> str:
 
 def convert_to_exchange_trading_pair(hb_trading_pair: str) -> str:
     return hb_trading_pair.replace("-", "/")
+
+
+def get_exchange_trading_pair_from_currencies(listing_currecy: str, reference_currency: str) -> str:
+    return listing_currecy + "/" + reference_currency
 
 
 # get timestamp in milliseconds
