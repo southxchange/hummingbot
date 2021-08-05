@@ -1,3 +1,4 @@
+from typing import Optional, List, Dict, Any, AsyncIterable
 import random
 import string
 import requests
@@ -23,7 +24,7 @@ DEFAULT_FEES = [0.1, 0.1]
 
 HBOT_BROKER_ID = "HMBot"
 
-def get_markets_enabled() -> Dict[int , str]:
+def get_market_id(trading_pairs: List[str]) -> int:
     url = f"{REST_URL}markets"
     resp = requests.get(url)
     if resp.status_code != 200:
@@ -32,10 +33,12 @@ def get_markets_enabled() -> Dict[int , str]:
     list_markets_enabled :Dict[int , str] = {}
     try:
         for item in resp_text:
-            list_markets_enabled[item[2]] = (f"{item[0]}-{item[1]}")
+            # list_markets_enabled[item[2]] = (f"{item[0]}-{item[1]}")
+            if trading_pairs[0] == (f"{item[0]}-{item[1]}"):
+                return item[2]
     except Exception as e:
         fall = e
-    return list_markets_enabled
+    return 0        
         
 def get_rest_url_private(account_id: int) -> str:
     return f"https://www.southxchange.com/api/v4"
@@ -51,6 +54,9 @@ def convert_from_exchange_trading_pair(exchange_trading_pair: str) -> str:
 
 def convert_to_exchange_trading_pair(hb_trading_pair: str) -> str:
     return hb_trading_pair.replace("-", "/")
+
+def get_exchange_trading_pair_from_currencies(listing_currecy: str, reference_currency: str) -> str:
+    return listing_currecy + "/" + reference_currency
 
 # get timestamp in milliseconds
 def get_ms_timestamp() -> int:

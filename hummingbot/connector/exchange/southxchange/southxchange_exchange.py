@@ -42,7 +42,7 @@ from hummingbot.connector.exchange_py_base import ExchangePyBase
 from hummingbot.connector.exchange.southxchange.southxchange_order_book_tracker import SouthxchangeOrderBookTracker
 from hummingbot.connector.exchange.southxchange.southxchange_user_stream_tracker import SouthxchangeUserStreamTracker
 from hummingbot.connector.exchange.southxchange.southxchange_auth import SouthXchangeAuth
-# from hummingbot.connector.exchange.southxchange.southxchange_in_flight_order import AscendExInFlightOrder
+from hummingbot.connector.exchange.southxchange.southxchange_in_flight_order import SouthXchangeInFlightOrder
 from hummingbot.connector.exchange.southxchange import  southxchange_utils
 from hummingbot.connector.exchange.southxchange.southxchange_constants import EXCHANGE_NAME, REST_URL
 from hummingbot.core.data_type.common import OpenOrder
@@ -53,18 +53,18 @@ s_decimal_0 = Decimal("0")
 SouthxchangeOrder = namedtuple("SouthxchangeOrder", "symbol price orderQty orderType avgPx cumFee cumFilledQty errorCode feeAsset lastExecTime orderId seqNum side status stopPrice execInst")
 SouthxchangeBalance = namedtuple("SouthxchangeBalance", "Currency Deposited Available Unconfirmed")
 
-class AscendExTradingRule(TradingRule):
-    def __init__(self,
-                 trading_pair: str,
-                 min_price_increment: Decimal,
-                 min_base_amount_increment: Decimal,
-                 min_notional_size: Decimal,
-                 max_notional_size: Decimal):
-        super().__init__(trading_pair=trading_pair,
-                         min_price_increment=min_price_increment,
-                         min_base_amount_increment=min_base_amount_increment,
-                         min_notional_size=min_notional_size)
-        self.max_notional_size = max_notional_size
+# class AscendExTradingRule(TradingRule):
+#     def __init__(self,
+#                  trading_pair: str,
+#                  min_price_increment: Decimal,
+#                  min_base_amount_increment: Decimal,
+#                  min_notional_size: Decimal,
+#                  max_notional_size: Decimal):
+#         super().__init__(trading_pair=trading_pair,
+#                          min_price_increment=min_price_increment,
+#                          min_base_amount_increment=min_base_amount_increment,
+#                          min_notional_size=min_notional_size)
+#         self.max_notional_size = max_notional_size
 class SouthXchangeTradingRule(TradingRule):
     def __init__(self,
                  trading_pair: str,
@@ -106,11 +106,11 @@ class SouthxchangeExchange(ExchangePyBase):
         :param trading_required: Whether actual trading is needed.
         """
         super().__init__()
-        self._trading_required = False # Modify SX # trading_required
+        self._trading_required = False # trading_required
         self._trading_pairs = trading_pairs
-        self._markets_enabled = southxchange_utils.get_markets_enabled()
+        # self._markets_enabled = southxchange_utils.get_market_id(trading_pairs=trading_pairs)
         self._southxchange_auth = SouthXchangeAuth(southxchange_api_key, southxchange_secret_key)
-        self._order_book_tracker = SouthxchangeOrderBookTracker(trading_pairs=trading_pairs, markets_enabled = self._markets_enabled)
+        self._order_book_tracker = SouthxchangeOrderBookTracker(trading_pairs=trading_pairs)
         self._user_stream_tracker = SouthxchangeUserStreamTracker(self._southxchange_auth, trading_pairs)
         self._ev_loop = asyncio.get_event_loop()
         self._shared_client = None
@@ -139,9 +139,9 @@ class SouthxchangeExchange(ExchangePyBase):
     def trading_rules(self) -> Dict[str, SouthXchangeTradingRule]:
         return self._trading_rules
 
-    # @property
-    # def in_flight_orders(self) -> Dict[str, AscendExInFlightOrder]:
-    #     return self._in_flight_orders
+    @property
+    def in_flight_orders(self) -> Dict[str, SouthXchangeInFlightOrder]:
+        return self._in_flight_orders
 
     @property
     def status_dict(self) -> Dict[str, bool]:
@@ -263,8 +263,6 @@ class SouthxchangeExchange(ExchangePyBase):
             self._shared_client = aiohttp.ClientSession()
         return self._shared_client
 
-
-
     async def _trading_rules_polling_loop(self):
         """
         Periodically update trading rule.
@@ -289,34 +287,8 @@ class SouthxchangeExchange(ExchangePyBase):
         list_fees = await self._api_request(
             method="get",
             path_url="fees")
-        # self._trading_rules = self._format_trading_rules(list_fees.get("Currencies"),list_fees.get("Markets"))
-
-        # response = await aiohttp.ClientSession().get(f"https://ascendex.com/api/pro/v1/products")
-        # async with aiohttp.ClientSession() as client:
-        #     resp = await client.get(f"https://ascendex.com/api/pro/v1/products")
-        #     if resp.status != 200:
-        #         raise IOError(
-        #             f"Error fetching last traded prices at {EXCHANGE_NAME}. "
-        #             f"HTTP status is {resp.status}."
-        #         )
-        #     data: List[str] = await resp.json()
-        #     trading_rules = {}
-        #     for rule in data["data"]:
-        #         try:
-        #             trading_pair = southxchange_utils.convert_from_exchange_trading_pair(rule["symbol"])
-        #             trading_rules[trading_pair] = AscendExTradingRule(
-        #                 trading_pair,
-        #                 min_price_increment=Decimal(rule["tickSize"]),
-        #                 min_base_amount_increment=Decimal(rule["lotSize"]),
-        #                 min_notional_size=Decimal(rule["minNotional"]),
-        #                 max_notional_size=Decimal(rule["maxNotional"])
-        #             )
-        #         except Exception:
-        #             self.logger().error(f"Error parsing the trading pair rule {rule}. Skipping.", exc_info=True)
-
         self._trading_rules.clear()
         self._trading_rules = self._format_trading_rules(list_fees.get("Currencies"),list_fees.get("Markets"))
-        # self._trading_rules = self._format_trading_rules(data)
 
     def _format_trading_rules(self, currencies: Dict[str, Any], markets: Dict[str, Any]) -> Dict[str, SouthXchangeTradingRule]:
         """
@@ -368,26 +340,6 @@ class SouthxchangeExchange(ExchangePyBase):
                     min_price_increment=Decimal(precision_rule),
                     min_base_amount_increment=Decimal(precision_rule)
                 )                                    
-
-
-
-        # trading_rules = {}
-        # for rule in instruments_info["data"]:
-        #     try:
-        #         trading_pair = southxchange_utils.convert_from_exchange_trading_pair(rule["symbol"])
-        #         trading_rules[trading_pair] = AscendExTradingRule(
-        #             trading_pair,
-        #             min_price_increment=Decimal(rule["tickSize"]),
-        #             min_base_amount_increment=Decimal(rule["lotSize"]),
-        #             min_notional_size=Decimal(rule["minNotional"]),
-        #             max_notional_size=Decimal(rule["maxNotional"])
-        #         )
-        #     except Exception:
-        #         self.logger().error(f"Error parsing the trading pair rule {rule}. Skipping.", exc_info=True)
-
-
-
-
         # for rule in markets["data"]:
         #     try:
         #         trading_pair = "LTC2-USD2" # southxchange_utils.convert_from_exchange_trading_pair(rule["symbol"])
@@ -406,26 +358,10 @@ class SouthxchangeExchange(ExchangePyBase):
         """
         Modify - SouthXchange
         """
-        # headers = {
-        #     **self._southxchange_auth.get_headers(),
-        #     **self._southxchange_auth.get_auth_headers("info"),
-        # }
-        url = f"{REST_URL}/getUserInfo"
-        # response = await aiohttp.ClientSession().get(url, headers=headers)
-
         response = await self._api_request(
             method="post",
             path_url="getUserInfo",
             is_auth_required=True)
-        # try:
-        #     parsed_response = json.loads(await response.text())
-        # except Exception as e:
-        #     raise IOError(f"Error parsing data from {url}. Error: {str(e)}")
-        # if response.status != 200:
-        #     raise IOError(f"Error fetching data from {url}. HTTP status is {response.status}. "
-        #                   f"Message: {parsed_response}")
-        # if parsed_response["code"] != 0:
-        #     raise IOError(f"{url} API call failed, response: {parsed_response}")
         self._trader_level = response.get("TraderLevel")
 
     async def _api_request(self,
@@ -442,7 +378,7 @@ class SouthxchangeExchange(ExchangePyBase):
         headers = None
 
         if is_auth_required:
-            url = f"{REST_URL}/{path_url}"
+            url = f"{REST_URL}{path_url}"
             headers = self._southxchange_auth.get_auth_headers()
         else:
             url = f"{REST_URL}{path_url}"
@@ -614,6 +550,27 @@ class SouthxchangeExchange(ExchangePyBase):
             self.trigger_event(MarketEvent.OrderFailure,
                                MarketOrderFailureEvent(self.current_timestamp, order_id, order_type))
 
+    def start_tracking_order(self,
+                             order_id: str,
+                             exchange_order_id: str,
+                             trading_pair: str,
+                             trade_type: TradeType,
+                             price: Decimal,
+                             amount: Decimal,
+                             order_type: OrderType):
+        """
+        Starts tracking an order by simply adding it into _in_flight_orders dictionary.
+        """
+        self._in_flight_orders[order_id] = SouthXchangeInFlightOrder(
+            client_order_id=order_id,
+            exchange_order_id=exchange_order_id,
+            trading_pair=trading_pair,
+            order_type=order_type,
+            trade_type=trade_type,
+            price=price,
+            amount=amount
+        )
+
     # def stop_tracking_order(self, order_id: str):
     #     """
     #     Stops tracking an order by simply removing it from _in_flight_orders dictionary.
@@ -665,30 +622,30 @@ class SouthxchangeExchange(ExchangePyBase):
     #                             f"Check API key and network connection."
     #         )
 
-    # async def _status_polling_loop(self):
-    #     """
-    #     Periodically update user balances and order status via REST API. This serves as a fallback measure for web
-    #     socket API updates.
-    #     """
-    #     while True:
-    #         try:
-    #             await self._poll_notifier.wait()
-    #             await safe_gather(
-    #                 self._update_balances(),
-    #                 self._update_order_status(),
-    #             )
-    #             self._last_poll_timestamp = self.current_timestamp
-    #         except asyncio.CancelledError:
-    #             raise
-    #         except Exception as e:
-    #             self.logger().error(str(e), exc_info=True)
-    #             self.logger().network("Unexpected error while fetching account updates.",
-    #                                   exc_info=True,
-    #                                   app_warning_msg="Could not fetch account updates from AscendEx. "
-    #                                                   "Check API key and network connection.")
-    #             await asyncio.sleep(0.5)
-    #         finally:
-    #             self._poll_notifier = asyncio.Event()
+    async def _status_polling_loop(self):
+        """
+        Periodically update user balances and order status via REST API. This serves as a fallback measure for web
+        socket API updates.
+        """
+        while True:
+            try:
+                await self._poll_notifier.wait()
+                await safe_gather(
+                    self._update_balances(),
+                    # self._update_order_status(),
+                )
+                self._last_poll_timestamp = self.current_timestamp
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                self.logger().error(str(e), exc_info=True)
+                self.logger().network("Unexpected error while fetching account updates.",
+                                      exc_info=True,
+                                      app_warning_msg="Could not fetch account updates from AscendEx. "
+                                                      "Check API key and network connection.")
+                await asyncio.sleep(0.5)
+            finally:
+                self._poll_notifier = asyncio.Event()
 
     async def _update_balances(self):
         """
@@ -803,62 +760,64 @@ class SouthxchangeExchange(ExchangePyBase):
     #             )
     #             await asyncio.sleep(1.0)
 
-    # async def _user_stream_event_listener(self):
-    #     """
-    #     Listens to message in _user_stream_tracker.user_stream queue. The messages are put in by
-    #     AscendExAPIUserStreamDataSource.
-    #     """
-    #     async for event_message in self._iter_user_event_queue():
-    #         try:
-    #             if event_message.get("m") == "order":
-    #                 order_data = event_message.get("data")
-    #                 trading_pair = order_data["s"]
-    #                 base_asset, quote_asset = tuple(asset for asset in trading_pair.split("/"))
-    #                 self._process_order_message(SouthxchangeOrder(
-    #                     trading_pair,
-    #                     order_data["p"],
-    #                     order_data["q"],
-    #                     order_data["ot"],
-    #                     order_data["ap"],
-    #                     order_data["cf"],
-    #                     order_data["cfq"],
-    #                     order_data["err"],
-    #                     order_data["fa"],
-    #                     order_data["t"],
-    #                     order_data["orderId"],
-    #                     order_data["sn"],
-    #                     order_data["sd"],
-    #                     order_data["st"],
-    #                     order_data["sp"],
-    #                     order_data["ei"]
-    #                 ))
-    #                 # Handles balance updates from orders.
-    #                 base_asset_balance = AscendExBalance(
-    #                     base_asset,
-    #                     order_data["bab"],
-    #                     order_data["btb"]
-    #                 )
-    #                 quote_asset_balance = AscendExBalance(
-    #                     quote_asset,
-    #                     order_data["qab"],
-    #                     order_data["qtb"]
-    #                 )
-    #                 self._process_balances([base_asset_balance, quote_asset_balance], False)
-    #             elif event_message.get("m") == "balance":
-    #                 # Handles balance updates from Deposits/Withdrawals, Transfers between Cash and Margin Accounts
-    #                 balance_data = event_message.get("data")
-    #                 balance = AscendExBalance(
-    #                     balance_data["a"],
-    #                     balance_data["ab"],
-    #                     balance_data["tb"]
-    #                 )
-    #                 self._process_balances(list(balance), False)
+    async def _user_stream_event_listener(self):
+        """
+        Listens to message in _user_stream_tracker.user_stream queue. The messages are put in by
+        AscendExAPIUserStreamDataSource.
+        """
+        async for event_message in self._iter_user_event_queue():
+            try:
+                if event_message.get("m") == "order":
+                    order_data = event_message.get("data")
+                    trading_pair = order_data["s"]
+                    base_asset, quote_asset = tuple(asset for asset in trading_pair.split("/"))
+                    self._process_order_message(SouthxchangeOrder(
+                        trading_pair,
+                        order_data["p"],
+                        order_data["q"],
+                        order_data["ot"],
+                        order_data["ap"],
+                        order_data["cf"],
+                        order_data["cfq"],
+                        order_data["err"],
+                        order_data["fa"],
+                        order_data["t"],
+                        order_data["orderId"],
+                        order_data["sn"],
+                        order_data["sd"],
+                        order_data["st"],
+                        order_data["sp"],
+                        order_data["ei"]
+                    ))
+                    # Handles balance updates from orders.
+                    base_asset_balance = SouthxchangeBalance(
+                        base_asset,
+                        order_data["bab"],
+                        order_data["btb"]
+                    )
+                    quote_asset_balance = SouthxchangeBalance(
+                        quote_asset,
+                        order_data["qab"],
+                        order_data["qtb"]
+                    )
+                    self._process_balances([base_asset_balance, quote_asset_balance], False)
+                elif event_message.get("m") == "balance":
+                    # Handles balance updates from Deposits/Withdrawals, Transfers between Cash and Margin Accounts
+                    balance_data = event_message.get("data")
+                    balance = SouthxchangeBalance(
+                        balance_data["a"],
+                        balance_data["ab"],
+                        balance_data["tb"]
+                    )
+                    self._process_balances(list(balance), False)
 
-    #         except asyncio.CancelledError:
-    #             raise
-    #         except Exception:
-    #             self.logger().error("Unexpected error in user stream listener loop.", exc_info=True)
-    #             await asyncio.sleep(5.0)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                self.logger().error("Unexpected error in user stream listener loop.", exc_info=True)
+                await asyncio.sleep(5.0)
+
+    
 
     async def get_open_orders(self) -> List[OpenOrder]:
         result = await self._api_request(
