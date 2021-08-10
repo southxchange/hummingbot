@@ -39,13 +39,16 @@ class SouthXchangeAuth():
             "header": header,
             "data": data,
         }
-      
+    def get_api_key(self) -> str:        
+        return self.api_key
+
     def get_headers(self) -> Dict[str, Any]:
         """
         Generates generic headers required by SouthXchange
         :return: a dictionary of headers
         """
-
         return {
             'Content-Type': 'application/json',
         }
+
+
