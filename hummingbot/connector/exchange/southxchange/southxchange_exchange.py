@@ -14,6 +14,7 @@ import json
 import aiohttp
 import time
 from collections import namedtuple
+import requests
 
 from hummingbot.core.network_iterator import NetworkStatus
 from hummingbot.logger import HummingbotLogger
@@ -49,21 +50,9 @@ ctce_logger = None
 s_decimal_NaN = Decimal("nan")
 s_decimal_0 = Decimal("0")
 
-SouthxchangeOrder = namedtuple("SouthxchangeOrder", "code type amount originalAmount limitPrice listingCurrency referenceCurrency")
+SouthxchangeOrder = namedtuple("SouthxchangeOrder", "orderId orderMarketId orderTime orderCurrencyGet orderCurrencyGive orderAmount orderOriginalAmount orderPrice orderType status")
 SouthxchangeBalance = namedtuple("SouthxchangeBalance", "Currency Deposited Available Unconfirmed")
 
-# class AscendExTradingRule(TradingRule):
-#     def __init__(self,
-#                  trading_pair: str,
-#                  min_price_increment: Decimal,
-#                  min_base_amount_increment: Decimal,
-#                  min_notional_size: Decimal,
-#                  max_notional_size: Decimal):
-#         super().__init__(trading_pair=trading_pair,
-#                          min_price_increment=min_price_increment,
-#                          min_base_amount_increment=min_base_amount_increment,
-#                          min_notional_size=min_notional_size)
-#         self.max_notional_size = max_notional_size
 class SouthXchangeTradingRule(TradingRule):
     def __init__(self,
                  trading_pair: str,
@@ -77,7 +66,7 @@ class SouthXchangeTradingRule(TradingRule):
 
 class SouthxchangeExchange(ExchangePyBase):
     """
-    AscendExExchange connects with AscendEx exchange and provides order book pricing, user account tracking and
+    SouthxchangeExchange connects with SouthxchangeExchange exchange and provides order book pricing, user account tracking and
     trading functionality.
     """
     API_CALL_TIMEOUT = 10.0
@@ -98,12 +87,6 @@ class SouthxchangeExchange(ExchangePyBase):
                  trading_pairs: Optional[List[str]] = None,
                  trading_required: bool = True
                  ):
-        """
-        :param ascend_ex_api_key: The API key to connect to private AscendEx APIs.
-        :param ascend_ex_secret_key: The API secret.
-        :param trading_pairs: The market trading pairs which to track order book data.
-        :param trading_required: Whether actual trading is needed.
-        """
         super().__init__()
         self._trading_required = trading_required
         self._trading_pairs = trading_pairs
@@ -122,8 +105,6 @@ class SouthxchangeExchange(ExchangePyBase):
         self._user_stream_event_listener_task = None
         self._trading_rules_polling_task = None
         self._last_poll_timestamp = 0
-        # self._account_group = None  # required in order to make post requests
-        # self._account_uid = None  # required in order to produce deterministic order ids
         self._trader_level = None
 
     @property
@@ -275,7 +256,7 @@ class SouthxchangeExchange(ExchangePyBase):
             except Exception as e:
                 self.logger().network(f"Unexpected error while fetching trading rules. Error: {str(e)}",
                                       exc_info=True,
-                                      app_warning_msg="Could not fetch new trading rules from AscendEx. "
+                                      app_warning_msg="Could not fetch new trading rules from SouthxchangeExchange. "
                                                       "Check network connection.")
                 await asyncio.sleep(0.5)
 
@@ -458,15 +439,15 @@ class SouthxchangeExchange(ExchangePyBase):
         safe_ensure_future(self._create_order(TradeType.SELL, client_order_id, trading_pair, amount, order_type, price))
         return client_order_id
 
-    # def cancel(self, trading_pair: str, order_id: str):
-    #     """
-    #     Cancel an order. This function returns immediately.
-    #     To get the cancellation result, you'll have to wait for OrderCancelledEvent.
-    #     :param trading_pair: The market (e.g. BTC-USDT) of the order.
-    #     :param order_id: The internal order id (also called client_order_id)
-    #     """
-    #     safe_ensure_future(self._execute_cancel(trading_pair, order_id))
-    #     return order_id
+    def cancel(self, trading_pair: str, order_id: str):
+        """
+        Cancel an order. This function returns immediately.
+        To get the cancellation result, you'll have to wait for OrderCancelledEvent.
+        :param trading_pair: The market (e.g. BTC-USDT) of the order.
+        :param order_id: The internal order id (also called client_order_id)
+        """
+        safe_ensure_future(self._execute_cancel(trading_pair, order_id))
+        return order_id
 
     async def _create_order(self,
                             trade_type: TradeType,
@@ -529,11 +510,6 @@ class SouthxchangeExchange(ExchangePyBase):
                                     f"{amount} {trading_pair}.")
                     tracked_order.exchange_order_id = exchange_order_id
 
-
-
-            
-
-
             event_tag = MarketEvent.BuyOrderCreated if trade_type is TradeType.BUY else MarketEvent.SellOrderCreated
             event_class = BuyOrderCreatedEvent if trade_type is TradeType.BUY else SellOrderCreatedEvent
             self.trigger_event(event_tag,
@@ -551,7 +527,7 @@ class SouthxchangeExchange(ExchangePyBase):
         except Exception as e:
             self.stop_tracking_order(order_id)
             self.logger().network(
-                f"Error submitting {trade_type.name} {order_type.name} order to AscendEx for "
+                f"Error submitting {trade_type.name} {order_type.name} order to SouthXchange for "
                 f"{amount} {trading_pair} "
                 f"{price}.",
                 exc_info=True,
@@ -633,7 +609,7 @@ class SouthxchangeExchange(ExchangePyBase):
                 await self._poll_notifier.wait()
                 await safe_gather(
                     self._update_balances(),
-                    # self._update_order_status(),
+                    self._update_order_status(),
                 )
                 self._last_poll_timestamp = self.current_timestamp
             except asyncio.CancelledError:
@@ -642,7 +618,7 @@ class SouthxchangeExchange(ExchangePyBase):
                 self.logger().error(str(e), exc_info=True)
                 self.logger().network("Unexpected error while fetching account updates.",
                                       exc_info=True,
-                                      app_warning_msg="Could not fetch account updates from AscendEx. "
+                                      app_warning_msg="Could not fetch account updates from SouthxchangeExchange. "
                                                       "Check API key and network connection.")
                 await asyncio.sleep(0.5)
             finally:
@@ -657,7 +633,6 @@ class SouthxchangeExchange(ExchangePyBase):
             method="post",
             path_url="listBalances",
             is_auth_required=True)
-            # force_auth_path_url="balance")
         balances = list(map(
             lambda balance: SouthxchangeBalance(
                 balance["Currency"],
@@ -665,56 +640,54 @@ class SouthxchangeExchange(ExchangePyBase):
                 balance["Available"],
                 balance["Unconfirmed"]
             ),
-            response #.get(response[0], list())
+            response
         ))
         self._process_balances(balances)
 
-    # async def _update_order_status(self):
-    #     """
-    #     Calls REST API to get status update for each in-flight order.
-    #     """
-    #     last_tick = int(self._last_poll_timestamp / self.UPDATE_ORDER_STATUS_MIN_INTERVAL)
-    #     current_tick = int(self.current_timestamp / self.UPDATE_ORDER_STATUS_MIN_INTERVAL)
+    async def _update_order_status(self):
+        """
+        Calls REST API to get status update for each in-flight order.
+        """
+        last_tick = int(self._last_poll_timestamp / self.UPDATE_ORDER_STATUS_MIN_INTERVAL)
+        current_tick = int(self.current_timestamp / self.UPDATE_ORDER_STATUS_MIN_INTERVAL)
 
-    #     if current_tick > last_tick and len(self._in_flight_orders) > 0:
-    #         tracked_orders = list(self._in_flight_orders.values())
-    #         tasks = []
-    #         for tracked_order in tracked_orders:
-    #             order_id = await tracked_order.get_exchange_order_id()
-    #             tasks.append(self._api_request(
-    #                 method="get",
-    #                 path_url=f"cash/order/status?orderId={order_id}",
-    #                 is_auth_required=True,
-    #                 force_auth_path_url="order/status")
-    #             )
-    #         self.logger().debug(f"Polling for order status updates of {len(tasks)} orders.")
-    #         responses = await safe_gather(*tasks, return_exceptions=True)
-    #         for response in responses:
-    #             if isinstance(response, Exception):
-    #                 raise response
-    #             if "data" not in response:
-    #                 self.logger().info(f"_update_order_status result not in resp: {response}")
-    #                 continue
+        if current_tick > last_tick and len(self._in_flight_orders) > 0:
+            tracked_orders = list(self._in_flight_orders.values())
+            tasks = []
+            for tracked_order in tracked_orders:
+                order_id = await tracked_order.get_exchange_order_id()                
+                api_params = {
+                    "code": order_id,
+                }
+                tasks.append(self._api_request(  
+                    method="post",
+                    path_url="getOrder",
+                    params=api_params,
+                    is_auth_required=True)
+                )
+            self.logger().debug(f"Polling for order status updates of {len(tasks)} orders.")
+            responses = await safe_gather(*tasks, return_exceptions=True)
+            for response in responses:
+                if isinstance(response, Exception):
+                    raise response
+                if response is None:
+                    self.logger().info(f"_update_order_status result not in resp: {response}")
+                    continue
 
-    #             order_data = response.get("data")
-    #             self._process_order_message(SouthxchangeOrder(
-    #                 order_data["symbol"],
-    #                 order_data["price"],
-    #                 order_data["orderQty"],
-    #                 order_data["orderType"],
-    #                 order_data["avgPx"],
-    #                 order_data["cumFee"],
-    #                 order_data["cumFilledQty"],
-    #                 order_data["errorCode"],
-    #                 order_data["feeAsset"],
-    #                 order_data["lastExecTime"],
-    #                 order_data["orderId"],
-    #                 order_data["seqNum"],
-    #                 order_data["side"],
-    #                 order_data["status"],
-    #                 order_data["stopPrice"],
-    #                 order_data["execInst"]
-    #             ))
+                order = SouthxchangeOrder(
+                            # trading_pair,
+                            response["Code"],
+                            0, # idMarket,
+                            response["DateAdded"],
+                            response["ListingCurrency"],
+                            response["ReferenceCurrency"],
+                            response["Amount"],
+                            0,
+                            response["LimitPrice"],
+                            response["Type"],     
+                            response["Status"]                                    
+                        )
+                self._process_order_message(order)  
 
     async def cancel_all(self, timeout_seconds: float):
         """
@@ -755,7 +728,7 @@ class SouthxchangeExchange(ExchangePyBase):
             self.logger().network(
                 "Failed to cancel all orders.",
                 exc_info=True,
-                app_warning_msg="Failed to cancel all orders on AscendEx. Check API key and network connection."
+                app_warning_msg="Failed to cancel all orders on SouthxchangeExchange. Check API key and network connection."
             )
         return cancellation_results
 
@@ -800,136 +773,83 @@ class SouthxchangeExchange(ExchangePyBase):
                 self.logger().network(
                     "Unknown error. Retrying after 1 seconds.",
                     exc_info=True,
-                    app_warning_msg="Could not fetch user events from AscendEx. Check API key and network connection."
+                    app_warning_msg="Could not fetch user events from SouthxchangeExchange. Check API key and network connection."
                 )
                 await asyncio.sleep(1.0)
 
     async def _user_stream_event_listener(self):
         """
         Listens to message in _user_stream_tracker.user_stream queue. The messages are put in by
-        AscendExAPIUserStreamDataSource.
-        """
+        SouthxchangeAPIUserStreamDataSource
+        """       
         async for event_message in self._iter_user_event_queue():
             try:
-                if event_message.get("type") == "orders":
-                    list_orders = event_message.get("data")
-                    list_orders_to_process: List[SouthxchangeOrder] = [] 
-                    for order_data in list_orders:
+                prueba = self._iter_user_event_queue()
+                if event_message.get("k") == "order":
+                    list_orders_to_process = event_message.get("v")
+                    for order_data in list_orders_to_process:                        
+                        try:   
+                            params = {
+                                "code": order_data["c"],
+                            }
+                            url = f"{REST_URL}getOrder"     
+                            headers = self._southxchange_auth.get_auth_headers(url, params)           
+                            resp = requests.post(url,headers= headers["header"],data=json.dumps(params))
+                            if resp.status_code == 200:
+                                order = json.loads(resp.text)
+                        except Exception as e:
+                            return                       
                         
-                #     order_data = event_message.get("data")
-                #     trading_pair = order_data["s"]
-                #     base_asset, quote_asset = tuple(asset for asset in trading_pair.split("/"))
-                        new = SouthxchangeOrder(
+                        if(order_data["b"] == True):
+                            orderType = "buy"
+                        else:
+                            orderType = "sell"
+                        if order["Status"] in {"executed", "partiallyexecuted", "partiallyexecutedbutnotenoughbalance"}:
+                              self._process_trade_message(SouthxchangeOrder(
                                     # trading_pair,
-                                    order_data["Code"],
-                                    order_data["Type"],
-                                    order_data["Amount"],
-                                    order_data["OriginalAmount"],
-                                    order_data["LimitPrice"],
-                                    order_data["ListingCurrency"],
-                                    order_data["ReferenceCurrency"]
-                                )
-                        # list_orders_to_process.append(SouthxchangeOrder(
-                        #     # trading_pair,
-                        #     order_data["Code"],
-                        #     order_data["Type"],
-                        #     order_data["Amount"],
-                        #     order_data["OriginalAmount"],
-                        #     order_data["LimitPrice"],
-                        #     order_data["ListingCurrency"],
-                        #     order_data["ReferenceCurrency"]
-                        # ))
-                        list_orders_to_process.append(new)
-                        # self._process_order_message(SouthxchangeOrder(
-                        #     # trading_pair,
-                        #     order_data["Code"],
-                        #     order_data["Type"],
-                        #     order_data["Amount"],
-                        #     order_data["OriginalAmount"],
-                        #     order_data["LimitPrice"],
-                        #     order_data["ListingCurrency"],
-                        #     order_data["ReferenceCurrency"]
-                        # ))
-
-
-                #     # Handles balance updates from orders.
-                #     base_asset_balance = SouthxchangeBalance(
-                #         base_asset,
-                #         order_data["bab"],
-                #         order_data["btb"]
-                #     )
-                #     quote_asset_balance = SouthxchangeBalance(
-                #         quote_asset,
-                #         order_data["qab"],
-                #         order_data["qtb"]
-                #     )
-                #     self._process_balances([base_asset_balance, quote_asset_balance], False)
-                # elif event_message.get("m") == "balance":
-                #     # Handles balance updates from Deposits/Withdrawals, Transfers between Cash and Margin Accounts
-                #     balance_data = event_message.get("data")
-                #     balance = SouthxchangeBalance(
-                #         balance_data["a"],
-                #         balance_data["ab"],
-                #         balance_data["tb"]
-                #     )
-                #     self._process_balances(list(balance), False)
-                    if len(list_orders) > 0:
-                        self._process_order_message(list_orders_to_process)
-                    prueba = event_message.get("data")
-                elif event_message.get("type") == "balances":
-                    balances = list(map(
-                    lambda balance: SouthxchangeBalance(
-                        balance["Currency"],
-                        balance["Deposited"],
-                        balance["Available"],
-                        balance["Unconfirmed"]
-                        ),
-                        event_message.get("data", list())
-                    ))
-                    self._process_balances(balances)
-
-                # balances = list(map(
-                #     lambda balance: SouthxchangeBalance(
-                #         balance["Currency"],
-                #         balance["Deposited"],
-                #         balance["Available"],
-                #         balance["Unconfirmed"]
-                #     ),
-                #     event_message #.get(response[0], list())
-                # ))
-                # self._process_balances(balances)
+                                    str(order_data["c"]),
+                                    order_data["m"],
+                                    order_data["d"],
+                                    order_data["get"],
+                                    order_data["giv"],
+                                    order_data["a"],
+                                    order_data["oa"],
+                                    order_data["p"],
+                                    orderType,
+                                    order["Status"]                                                               
+                                ))
+                        else:
+                            self._process_order_message(SouthxchangeOrder(
+                                    # trading_pair,
+                                    str(order_data["c"]),
+                                    order_data["m"],
+                                    order_data["d"],
+                                    order_data["get"],
+                                    order_data["giv"],
+                                    order_data["a"],
+                                    order_data["oa"],
+                                    order_data["p"],
+                                    orderType,
+                                    order["Status"]                                                                         
+                                ))    
+                elif event_message.get("k") == "balance":
+                    await self._update_balances()
             except asyncio.CancelledError:
                 raise
             except Exception as e:
                 self.logger().error("Unexpected error in user stream listener loop.", exc_info=True)
                 await asyncio.sleep(15.0)
-
-    
-
+   
     async def get_open_orders(self) -> List[OpenOrder]:
         result = await self._api_request(
             method="post",
             path_url="listOrders",
             is_auth_required=True,
-            # force_auth_path_url="order/open"
         )
         ret_val = []
-        for order in result: # ["data"]:
-            # if order["orderType"].lower() != "limit":
-            #     self.logger().debug(f"Unsupported orderType: {order['orderType']}. Order: {order}",
-            #                         exc_info=True)
-            #     continue
-
+        for order in result:
             exchange_order_id = order["Code"]
             client_order_id = None
-            # for in_flight_order in self._in_flight_orders.values():
-            #     if in_flight_order.exchange_order_id == exchange_order_id:
-            #         client_order_id = in_flight_order.client_order_id
-
-            # if client_order_id is None:
-            #     self.logger().debug(f"Unrecognized Order {exchange_order_id}: {order}")
-            #     continue
-
             ret_val.append(
                 OpenOrder(
                     client_order_id=client_order_id,
@@ -946,90 +866,134 @@ class SouthxchangeExchange(ExchangePyBase):
             )
         return ret_val
 
-    def _process_order_message(self, list_order_msg: List[SouthxchangeOrder]):
+    def _process_order_message(self, order_msg: SouthxchangeOrder):
         """
         Updates in-flight order and triggers cancellation or failure event if needed.
         :param order_msg: The order response from either REST or web socket API (they are of the same format)
         """
         
         client_order_id = None
-        for order_msg in list_order_msg:
-            exchange_order_id = order_msg.code
-            for in_flight_order in self._in_flight_orders.values():
-                if in_flight_order.exchange_order_id == exchange_order_id:
-                    client_order_id = in_flight_order.client_order_id
+        # for order_msg in list_order_msg:
+        exchange_order_id = order_msg.orderId
+        for in_flight_order in self._in_flight_orders.values():
+            if in_flight_order.exchange_order_id == exchange_order_id:
+                client_order_id = in_flight_order.client_order_id
 
-            if client_order_id is None:
-                continue
+        if client_order_id is None:
+            return
 
-            tracked_order = self._in_flight_orders[client_order_id]
+        tracked_order = self._in_flight_orders[client_order_id]
+        tracked_order.last_state = order_msg.status
+        if tracked_order.is_cancelled:
+            self.logger().info(f"Successfully cancelled order {client_order_id}.")
+            self.trigger_event(MarketEvent.OrderCancelled,
+                                OrderCancelledEvent(
+                                    self.current_timestamp,
+                                    client_order_id,
+                                    exchange_order_id))
+            tracked_order.cancelled_event.set()
+            self.stop_tracking_order(client_order_id)
+            return          
 
-            if tracked_order.executed_amount_base != (Decimal(order_msg.originalAmount) - Decimal(order_msg.amount)):
-                # Update the relevant order information when there is fill event
-                new_filled_amount = Decimal(order_msg.cumFilledQty) - tracked_order.executed_amount_base
-                new_fee_paid = Decimal(order_msg.cumFee) - tracked_order.fee_paid
-
-                tracked_order.executed_amount_base = Decimal(order_msg.cumFilledQty)
-                tracked_order.executed_amount_quote = Decimal(order_msg.avgPx) * tracked_order.executed_amount_base
-                tracked_order.fee_paid = Decimal(order_msg.cumFee)
-                tracked_order.fee_asset = order_msg.feeAsset
-
-                self.trigger_event(
-                    MarketEvent.OrderFilled,
-                    OrderFilledEvent(
-                        self.current_timestamp,
-                        client_order_id,
-                        tracked_order.trading_pair,
-                        tracked_order.trade_type,
-                        tracked_order.order_type,
-                        Decimal(order_msg.avgPx),
-                        new_filled_amount,
-                        TradeFee(0.0, [(tracked_order.fee_asset, new_fee_paid)]),
-                        exchange_order_id
-                    )
+        if tracked_order.is_failure:
+            self.logger().info(f"The market order {client_order_id} has failed according to order status API. "
+                                f"Reason: {southxchange_utils.get_api_reason(order_msg.errorCode)}")
+            self.trigger_event(MarketEvent.OrderFailure,
+                                MarketOrderFailureEvent(
+                                    self.current_timestamp,
+                                    client_order_id,
+                                    tracked_order.order_type
+                                ))
+            self.stop_tracking_order(client_order_id)
+            return
+        elif tracked_order.is_done:
+            event_tag = MarketEvent.BuyOrderCompleted if tracked_order.trade_type is TradeType.BUY else MarketEvent.SellOrderCompleted
+            event_class = BuyOrderCompletedEvent if tracked_order.trade_type is TradeType.BUY else SellOrderCompletedEvent
+            self.trigger_event(
+                event_tag,
+                event_class(
+                    self.current_timestamp,
+                    client_order_id,
+                    tracked_order.base_asset,
+                    tracked_order.quote_asset,
+                    tracked_order.fee_asset,
+                    tracked_order.executed_amount_base,
+                    tracked_order.executed_amount_quote,
+                    tracked_order.fee_paid,
+                    tracked_order.order_type,
+                    exchange_order_id
                 )
+            )
+            self.stop_tracking_order(client_order_id)
+            return
 
-        #     # update order status
-        #     tracked_order.last_state = order_msg.status
+    def _process_trade_message(self, order_msg: SouthxchangeOrder):
+        """
+        Updates in-flight order and triggers cancellation or failure event if needed.
+        :param order_msg: The order response from either REST or web socket API (they are of the same format)
+        """    
+        client_order_id = None
+        # for order_msg in list_order_msg:
+        exchange_order_id = order_msg.orderId
+        for in_flight_order in self._in_flight_orders.values():
+            if in_flight_order.exchange_order_id == exchange_order_id:
+                client_order_id = in_flight_order.client_order_id
 
-        #     if tracked_order.is_cancelled:
-        #         self.logger().info(f"Successfully cancelled order {client_order_id}.")
-        #         self.trigger_event(MarketEvent.OrderCancelled,
-        #                            OrderCancelledEvent(
-        #                                self.current_timestamp,
-        #                                client_order_id,
-        #                                exchange_order_id))
-        #         tracked_order.cancelled_event.set()
-        #         self.stop_tracking_order(client_order_id)
-        #     elif tracked_order.is_failure:
-        #         self.logger().info(f"The market order {client_order_id} has failed according to order status API. "
-        #                            f"Reason: {southxchange_utils.get_api_reason(order_msg.errorCode)}")
-        #         self.trigger_event(MarketEvent.OrderFailure,
-        #                            MarketOrderFailureEvent(
-        #                                self.current_timestamp,
-        #                                client_order_id,
-        #                                tracked_order.order_type
-        #                            ))
-        #         self.stop_tracking_order(client_order_id)
-        #     elif tracked_order.is_done:
-        #         event_tag = MarketEvent.BuyOrderCompleted if tracked_order.trade_type is TradeType.BUY else MarketEvent.SellOrderCompleted
-        #         event_class = BuyOrderCompletedEvent if tracked_order.trade_type is TradeType.BUY else SellOrderCompletedEvent
-        #         self.trigger_event(
-        #             event_tag,
-        #             event_class(
-        #                 self.current_timestamp,
-        #                 client_order_id,
-        #                 tracked_order.base_asset,
-        #                 tracked_order.quote_asset,
-        #                 tracked_order.fee_asset,
-        #                 tracked_order.executed_amount_base,
-        #                 tracked_order.executed_amount_quote,
-        #                 tracked_order.fee_paid,
-        #                 tracked_order.order_type,
-        #                 exchange_order_id
-        #             )
-        #         )
-        #         self.stop_tracking_order(client_order_id)
+        if client_order_id is None:
+            return
+        tracked_order = self._in_flight_orders[client_order_id]
+        # ***** Funcionalidad si es un trade - INICIO
+        cumFilledQty =  Decimal(order_msg.orderOriginalAmount) - Decimal(order_msg.orderAmount)
+        if tracked_order.executed_amount_base != cumFilledQty:
+            trasanctionsOrder: Dict[any, any]
+
+            try:   
+                params = {
+                    "transactionType": "tradesbyordercode",
+                    "optionalFilter": int(exchange_order_id),
+                    "pageSize": 50,
+                }
+                url = f"{REST_URL}listTransactions"     
+                headers = self._southxchange_auth.get_auth_headers(url, params)           
+                resp = requests.post(url,headers= headers["header"],data=json.dumps(params))
+                if resp.status_code == 200:
+                    trasanctionsOrder = json.loads(resp.text)
+            except Exception as e:
+                return
+
+            acumalatesFee = Decimal("0.0")
+            feeAsset: str = ""
+            for transOrder in trasanctionsOrder.get('Result'):
+                if(transOrder["Type"] == "tradefee"):
+                    acumalatesFee = acumalatesFee + Decimal(transOrder["Amount"] * (-1)) 
+                    feeAsset = transOrder["CurrencyCode"]
+
+            # Update the relevant order information when there is fill event
+            new_filled_amount = cumFilledQty - tracked_order.executed_amount_base
+            new_fee_paid = acumalatesFee - tracked_order.fee_paid
+
+            tracked_order.executed_amount_base = cumFilledQty
+            tracked_order.executed_amount_quote = Decimal(order_msg.orderPrice) * tracked_order.executed_amount_base
+            tracked_order.fee_paid = Decimal(acumalatesFee)
+            tracked_order.fee_asset = feeAsset
+
+            self.trigger_event(
+                MarketEvent.OrderFilled,
+                OrderFilledEvent(
+                    self.current_timestamp,
+                    client_order_id,
+                    tracked_order.trading_pair,
+                    tracked_order.trade_type,
+                    tracked_order.order_type,
+                    Decimal(order_msg.orderPrice),
+                    new_filled_amount,
+                    TradeFee(0.0, [(tracked_order.fee_asset, new_fee_paid)]),
+                    exchange_order_id
+                )
+            )
+            # update order status
+            tracked_order.last_state = order_msg.status           
+        # ***** Funcionalidad si es un trade - FIN
 
     def _process_balances(self, balances: List[SouthxchangeBalance], is_complete_list: bool = True):
         local_asset_names = set(self._account_balances.keys())

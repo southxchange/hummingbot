@@ -98,32 +98,32 @@ class SouthXchangeOrderBook(OrderBook):
     #         timestamp=record.timestamp
     #     )
 
-    # @classmethod
-    # def trade_message_from_exchange(cls,
-    #                                 msg: Dict[str, Any],
-    #                                 timestamp: Optional[float] = None,
-    #                                 metadata: Optional[Dict] = None):
-    #     """
-    #     Convert a trade data into standard OrderBookMessage format
-    #     :param record: a trade data from the database
-    #     :return: AscendExOrderBookMessage
-    #     """
+    @classmethod
+    def trade_message_from_exchange(cls,
+                                    msg: Dict[str, Any],
+                                    timestamp: Optional[float] = None,
+                                    metadata: Optional[Dict] = None):
+        """
+        Convert a trade data into standard OrderBookMessage format
+        :param record: a trade data from the database
+        :return: SouthXchangeOrderBookMessage
+        """
 
-    #     if metadata:
-    #         msg.update(metadata)
+        if metadata:
+            msg.update(metadata)
 
-    #     msg.update({
-    #         "exchange_order_id": msg.get("seqnum"),
-    #         "trade_type": "buy" if msg.get("bm") else "sell",
-    #         "price": msg.get("p"),
-    #         "amount": msg.get("q"),
-    #     })
+        msg.update({
+            # "exchange_order_id": timestamp,
+            "trade_type": "buy" if msg.get("b") else "sell",
+            "price": msg.get("p"),
+            "amount": msg.get("a"),
+        })
 
-    #     return SouthXchangeOrderBookMessage(
-    #         message_type=OrderBookMessageType.TRADE,
-    #         content=msg,
-    #         timestamp=timestamp
-    #     )
+        return SouthXchangeOrderBookMessage(
+            message_type=OrderBookMessageType.TRADE,
+            content=msg,
+            timestamp=timestamp
+        )
 
     # @classmethod
     # def trade_message_from_db(cls, record: RowProxy, metadata: Optional[Dict] = None):

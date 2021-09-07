@@ -33,7 +33,8 @@ def get_market_id(trading_pairs: List[str]) -> int:
     list_markets_enabled :Dict[int , str] = {}
     try:
         for item in resp_text:
-            # list_markets_enabled[item[2]] = (f"{item[0]}-{item[1]}")
+            x1 = trading_pairs[0] 
+            x2 = f"{item[0]}-{item[1]}"
             if trading_pairs[0] == (f"{item[0]}-{item[1]}"):
                 return item[2]
     except Exception as e:
@@ -60,7 +61,7 @@ def get_exchange_trading_pair_from_currencies(listing_currecy: str, reference_cu
 
 # get timestamp in milliseconds
 def get_ms_timestamp() -> int:
-    return get_tracking_nonce_low_res()
+    return get_tracking_nonce()
 
 # get timestamp in milliseconds
 def time_to_num(time_str) -> int:

@@ -6,7 +6,8 @@ import websockets
 import ujson
 import time
 import pandas as pd
-import requests
+from datetime import datetime
+from dateutil import parser
 
 from typing import Optional, List, Dict, Any, AsyncIterable
 from hummingbot.core.data_type.order_book import OrderBook
@@ -142,27 +143,42 @@ class SouthxchangeAPIOrderBookDataSource(OrderBookTrackerDataSource):
                             msg = ujson.loads(raw_msg)
                             if msg is None:
                                 continue
-                            if (msg.get("k") == "bookdelta") or (msg.get("k") == "book"):
-                                msg_timestamp: int = get_ms_timestamp()
-                                list_itemsBook = convert_bookWebSocket_to_bookApi(msg.get("v"))
-                                order_book_message: OrderBookMessage = SouthXchangeOrderBook.diff_message_from_exchange(
-                                    list_itemsBook,
-                                    msg_timestamp,
-                                    metadata={"trading_pair": trading_pairs}
-                                )
-                                output.put_nowait(order_book_message)
-                            else:
+                            if msg.get("k") == "trade":
                                 """
                                 Modify - SouthXchange
                                 """
                                 for trade in msg.get("v"):
-                                    trade_timestamp: int = time_to_num(trade.get("d"))
+                                    tradeTimeStr = str(f"{parser.parse(trade.get('d')).hour}:{parser.parse(trade.get('d')).minute}:{parser.parse(trade.get('d')).second}")
+                                    trade_timestamp: int = time_to_num(tradeTimeStr)
                                     trade_msg: OrderBookMessage = SouthXchangeOrderBook.trade_message_from_exchange(
                                         trade,
                                         trade_timestamp,
                                         metadata={"trading_pair": trading_pairs}
                                     )
                                     output.put_nowait(trade_msg)
+                            else:
+                                continue
+                            # if (msg.get("k") == "bookdelta") or (msg.get("k") == "book"):
+                            #     msg_timestamp: int = get_ms_timestamp()
+                            #     list_itemsBook = convert_bookWebSocket_to_bookApi(msg.get("v"))
+                            #     order_book_message: OrderBookMessage = SouthXchangeOrderBook.diff_message_from_exchange(
+                            #         list_itemsBook,
+                            #         msg_timestamp,
+                            #         metadata={"trading_pair": trading_pairs}
+                            #     )
+                            #     output.put_nowait(order_book_message)
+                            # elif msg.get("k") == "trade":
+                            #     """
+                            #     Modify - SouthXchange
+                            #     """
+                            #     for trade in msg.get("v"):
+                            #         trade_timestamp: int = time_to_num(trade.get("d"))
+                            #         trade_msg: OrderBookMessage = SouthXchangeOrderBook.trade_message_from_exchange(
+                            #             trade,
+                            #             trade_timestamp,
+                            #             metadata={"trading_pair": trading_pairs}
+                            #         )
+                            #         output.put_nowait(trade_msg)
                         except Exception  as e:
                             raise
             except asyncio.CancelledError:
@@ -204,11 +220,12 @@ class SouthxchangeAPIOrderBookDataSource(OrderBookTrackerDataSource):
                             else:
                                 """
                                 Modify - SouthXchange
-                                """
+                                """                                
                                 # trading_pair: str = convert_from_exchange_trading_pair(msg.get("symbol"))
                                 # trading_pair2: str = "LTC2-USD2"
                                 for trade in msg.get("v"):
-                                    trade_timestamp: int = time_to_num(trade.get("d"))
+                                    tradeTimeStr = str(f"{parser.parse(trade.get('d')).hour}:{parser.parse(trade.get('d')).minute}:{parser.parse(trade.get('d')).second}")
+                                    trade_timestamp: int = time_to_num(tradeTimeStr)
                                     trade_msg: OrderBookMessage = SouthXchangeOrderBook.trade_message_from_exchange(
                                         trade,
                                         trade_timestamp,

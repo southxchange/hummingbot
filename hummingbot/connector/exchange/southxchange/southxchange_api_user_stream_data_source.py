@@ -11,8 +11,8 @@ from typing import Optional, List, AsyncIterable, Any
 from hummingbot.core.data_type.user_stream_tracker_data_source import UserStreamTrackerDataSource
 from hummingbot.logger import HummingbotLogger
 from hummingbot.connector.exchange.southxchange.southxchange_auth import SouthXchangeAuth
-from hummingbot.connector.exchange.southxchange.southxchange_constants import REST_URL, PONG_PAYLOAD
-from hummingbot.connector.exchange.southxchange.southxchange_utils import get_ws_url_private
+from hummingbot.connector.exchange.southxchange.southxchange_constants import PRIVATE_WS_URL, PONG_PAYLOAD
+from hummingbot.connector.exchange.southxchange.southxchange_utils import get_market_id, convert_to_exchange_trading_pair
 class SouthxchangeAPIUserStreamDataSource(UserStreamTrackerDataSource):
     MAX_RETRIES = 20
     MESSAGE_TIMEOUT = 10.0
@@ -33,6 +33,7 @@ class SouthxchangeAPIUserStreamDataSource(UserStreamTrackerDataSource):
         self._listen_for_user_stream_task = None
         self._last_recv_time: float = 0
         self._ws_client: websockets.WebSocketClientProtocol = None
+        self._idMarket = get_market_id(trading_pairs=trading_pairs)
         super().__init__()
 
     @property
@@ -48,72 +49,36 @@ class SouthxchangeAPIUserStreamDataSource(UserStreamTrackerDataSource):
         """
 
         while True:
+            tokenWS = self._southxchange__auth.get_websoxket_token()
             try:
-
-                url = f"{REST_URL}listBalances"
-                headers = self._southxchange__auth.get_auth_headers()
-                response = await aiohttp.ClientSession().post(
-                    url,
-                    headers= headers["header"],
-                    data=json.dumps(headers["data"])
-                )
-                info = await response.json()
-                balances = {
-                    "type" : "balances", 
-                    "data" : info,
+                payload = {
+                    "k": "subscribe",
+                    "v": self._idMarket
                 }
-                output.put_nowait(balances)
 
-                url = f"{REST_URL}listOrders"
-                headers = self._southxchange__auth.get_auth_headers()
-                response = await aiohttp.ClientSession().post(
-                    url,
-                    headers= headers["header"],
-                    data=json.dumps(headers["data"])
-                )
-                info = await response.json()
-                orders = {
-                    "type" : "orders", 
-                    "data" : info,
-                }
-                output.put_nowait(orders)
-                self._last_recv_time = time.time()
-                # response = await aiohttp.ClientSession().get(f"{REST_URL}/info", headers={
-                #     **self._southxchange__auth.get_headers(),
-                #     **self._southxchange__auth.get_auth_headers("info"),
-                # })
-                # info = await response.json()
-                # accountGroup = info.get("data").get("accountGroup")
-                # headers = self._southxchange__auth.get_auth_headers("stream")
-                # payload = {
-                #     "op": "sub",
-                #     "ch": "order:cash"
-                # }
+                async with websockets.connect(F"{PRIVATE_WS_URL}{tokenWS}") as ws:
+                    try:
+                        ws: websockets.WebSocketClientProtocol = ws
+                        await ws.send(ujson.dumps(payload))
 
-                # async with websockets.connect(f"{get_ws_url_private(accountGroup)}/stream", extra_headers=headers) as ws:
-                #     try:
-                #         ws: websockets.WebSocketClientProtocol = ws
-                #         await ws.send(ujson.dumps(payload))
-
-                #         async for raw_msg in self._inner_messages(ws):
-                #             try:
-                #                 msg = ujson.loads(raw_msg)
-                #                 if msg is None:
-                #                     continue
-
-                #                 output.put_nowait(msg)
-                #             except Exception:
-                #                 self.logger().error(
-                #                     "Unexpected error when parsing AscendEx message. ", exc_info=True
-                #                 )
-                #                 raise
-                #     except Exception:
-                #         self.logger().error(
-                #             "Unexpected error while listening to AscendEx messages. ", exc_info=True
-                #         )
-                #         raise
-                #     finally:
-                #         await ws.close()
+                        async for raw_msg in self._inner_messages(ws):
+                            try:
+                                msg = ujson.loads(raw_msg)
+                                if msg is None:
+                                    continue
+                                output.put_nowait(msg)
+                            except Exception  as e:
+                                self.logger().error(
+                                    "Unexpected error when parsing SouthXchange message. ", exc_info=True
+                                )
+                                raise
+                    except Exception:
+                        self.logger().error(
+                            "Unexpected error while listening to SouthXchange messages. ", exc_info=True
+                        )
+                        raise
+                    finally:
+                        await ws.close()
             except asyncio.CancelledError:
                 raise
             except Exception as e:

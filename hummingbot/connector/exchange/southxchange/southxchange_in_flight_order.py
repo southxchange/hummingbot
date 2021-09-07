@@ -38,15 +38,15 @@ class SouthXchangeInFlightOrder(InFlightOrderBase):
 
     @property
     def is_done(self) -> bool:
-        return self.last_state in {"Executed", "CanceledNotExecuted", "CanceledPartiallyExecuted"}
+        return self.last_state in {"executed"}
 
     @property
     def is_failure(self) -> bool:
-        return self.last_state in {"AmountBelowMinimum", "NotEnoughBalance", "PartiallyExecutedButNotEnoughBalance"}
+        return self.last_state in {"amountbelowminimum", "notenoughbalance", "partiallyexecutedbutnotenoughbalance"}
 
     @property
     def is_cancelled(self) -> bool:
-        return self.last_state in {"CanceledPartiallyExecuted", "CanceledNotExecuted", ""}
+        return self.last_state in {"canceledpartiallyexecuted", "cancelednotexecuted"}
 
     @classmethod
     def from_json(cls, data: Dict[str, Any]) -> InFlightOrderBase:
