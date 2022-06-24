@@ -12,7 +12,7 @@ from hummingbot.core.utils.wallet_setup import (
     import_and_save_wallet
 )
 from hummingbot.client.config.global_config_map import global_config_map
-from hummingbot.client.settings import CONNECTOR_SETTINGS
+from hummingbot.client.settings import AllConnectorSettings
 from hummingbot.core.utils.async_utils import safe_ensure_future
 from hummingbot.core.utils.async_call_scheduler import AsyncCallScheduler
 import asyncio
@@ -76,7 +76,7 @@ class Security:
     @classmethod
     def unlock_wallet(cls, public_key):
         if public_key not in cls._private_keys:
-            cls._private_keys[public_key] = unlock_wallet(public_key=public_key, password=Security.password)
+            cls._private_keys[public_key] = unlock_wallet(wallet_address=public_key, password=Security.password)
         return cls._private_keys[public_key]
 
     @classmethod
@@ -103,7 +103,7 @@ class Security:
 
     @classmethod
     def add_private_key(cls, private_key) -> str:
-        # Add private key and return public key
+        # Add private key and return the account address
         account = import_and_save_wallet(cls.password, private_key)
         cls._private_keys[account.address] = account.privateKey
         return account.address
@@ -138,6 +138,6 @@ class Security:
     async def api_keys(cls, exchange):
         await cls.wait_til_decryption_done()
         exchange_configs = [c for c in global_config_map.values()
-                            if c.key in CONNECTOR_SETTINGS[exchange].config_keys and
-                            c.key in cls._secure_configs]
+                            if c.key in AllConnectorSettings.get_connector_settings()[exchange].config_keys
+                            and c.key in cls._secure_configs]
         return {c.key: cls.decrypted_value(c.key) for c in exchange_configs}

@@ -1,15 +1,19 @@
-import random
-from typing import Callable, Optional
-from decimal import Decimal
 import os.path
+import random
+import re
+from decimal import Decimal
+from typing import Callable, Optional, Dict
+
+from tabulate import tabulate_formats
+
+from hummingbot.client.config.config_methods import using_exchange as using_exchange_pointer
+from hummingbot.client.config.config_validators import validate_bool, validate_decimal
 from hummingbot.client.config.config_var import ConfigVar
-import hummingbot.client.settings as settings
-from hummingbot.client.config.config_methods import paper_trade_disabled, using_exchange as using_exchange_pointer
-from hummingbot.client.config.config_validators import (
-    validate_bool,
-    validate_decimal
-)
-from hummingbot.core.rate_oracle.rate_oracle import RateOracleSource, RateOracle
+from hummingbot.client.settings import AllConnectorSettings, DEFAULT_KEY_FILE_PATH, DEFAULT_LOG_FILE_PATH
+from hummingbot.core.rate_oracle.rate_oracle import RateOracle, RateOracleSource
+
+PMM_SCRIPT_ENABLED_KEY = "pmm_script_enabled"
+PMM_SCRIPT_FILE_PATH_KEY = "pmm_script_file_path"
 
 
 def generate_client_id() -> str:
@@ -21,26 +25,18 @@ def using_exchange(exchange: str) -> Callable:
     return using_exchange_pointer(exchange)
 
 
-# Required conditions
-def using_bamboo_coordinator_mode() -> bool:
-    return global_config_map.get("bamboo_relay_use_coordinator").value
-
-
-def using_wallet() -> bool:
-    return paper_trade_disabled() and settings.ethereum_wallet_required()
-
-
-def validate_script_file_path(file_path: str) -> Optional[bool]:
+def validate_pmm_script_file_path(file_path: str) -> Optional[bool]:
+    import hummingbot.client.settings as settings
     path, name = os.path.split(file_path)
     if path == "":
-        file_path = os.path.join(settings.SCRIPTS_PATH, file_path)
+        file_path = os.path.join(settings.PMM_SCRIPTS_PATH, file_path)
     if not os.path.isfile(file_path):
         return f"{file_path} file does not exist."
 
 
-def connector_keys():
+def connector_keys() -> Dict[str, ConfigVar]:
     all_keys = {}
-    for connector_setting in settings.CONNECTOR_SETTINGS.values():
+    for connector_setting in AllConnectorSettings.get_connector_settings().values():
         all_keys.update(connector_setting.config_keys)
     return all_keys
 
@@ -54,6 +50,11 @@ def rate_oracle_source_on_validated(value: str):
     RateOracle.source = RateOracleSource[value]
 
 
+def validate_color(value: str) -> Optional[str]:
+    if not re.search(r'^#(?:[0-9a-fA-F]{2}){3}$', value):
+        return "Invalid color code"
+
+
 def global_token_on_validated(value: str):
     RateOracle.global_token = value.upper()
 
@@ -63,8 +64,6 @@ def global_token_symbol_on_validated(value: str):
 
 
 # Main global config store
-key_config_map = connector_keys()
-
 main_config_map = {
     # The variables below are usually not prompted during setup process
     "instance_id":
@@ -94,38 +93,22 @@ main_config_map = {
                   prompt=None,
                   required_if=lambda: False,
                   default=["hummingbot.strategy",
-                           "hummingbot.market",
-                           "hummingbot.wallet",
                            "conf"
                            ],
                   type_str="list"),
     "key_file_path":
         ConfigVar(key="key_file_path",
                   prompt=f"Where would you like to save your private key file? "
-                         f"(default '{settings.DEFAULT_KEY_FILE_PATH}') >>> ",
+                         f"(default '{DEFAULT_KEY_FILE_PATH}') >>> ",
                   required_if=lambda: False,
-                  default=settings.DEFAULT_KEY_FILE_PATH),
+                  default=DEFAULT_KEY_FILE_PATH),
     "log_file_path":
         ConfigVar(key="log_file_path",
-                  prompt=f"Where would you like to save your logs? (default '{settings.DEFAULT_LOG_FILE_PATH}') >>> ",
+                  prompt=f"Where would you like to save your logs? (default '{DEFAULT_LOG_FILE_PATH}') >>> ",
                   required_if=lambda: False,
-                  default=settings.DEFAULT_LOG_FILE_PATH),
+                  default=DEFAULT_LOG_FILE_PATH),
 
     # Required by chosen CEXes or DEXes
-    "paper_trade_enabled":
-        ConfigVar(key="paper_trade_enabled",
-                  prompt="Enable paper trading mode (Yes/No) ? >>> ",
-                  type_str="bool",
-                  default=False,
-                  required_if=lambda: True,
-                  validator=validate_bool),
-    "paper_trade_account_balance":
-        ConfigVar(key="paper_trade_account_balance",
-                  prompt="Enter paper trade balance settings (Input must be valid json: "
-                         "e.g. [[\"ETH\", 10.0], [\"USDC\", 100]]) >>> ",
-                  required_if=lambda: False,
-                  type_str="json",
-                  ),
     "celo_address":
         ConfigVar(key="celo_address",
                   prompt="Enter your Celo account address >>> ",
@@ -139,44 +122,10 @@ main_config_map = {
                   required_if=lambda: global_config_map["celo_address"].value is not None,
                   is_secure=True,
                   is_connect_key=True),
-    "ethereum_wallet":
-        ConfigVar(key="ethereum_wallet",
-                  prompt="Enter your wallet private key >>> ",
-                  type_str="str",
-                  required_if=lambda: False,
-                  is_connect_key=True),
-    "ethereum_rpc_url":
-        ConfigVar(key="ethereum_rpc_url",
-                  prompt="Which Ethereum node would you like your client to connect to? >>> ",
-                  required_if=lambda: global_config_map["ethereum_wallet"].value is not None),
-    "ethereum_rpc_ws_url":
-        ConfigVar(key="ethereum_rpc_ws_url",
-                  prompt="Enter the Websocket Address of your Ethereum Node >>> ",
-                  required_if=lambda: global_config_map["ethereum_rpc_url"].value is not None),
-    "ethereum_chain_name":
-        ConfigVar(key="ethereum_chain_name",
-                  prompt="What is your preferred ethereum chain name (MAIN_NET, KOVAN)? >>> ",
-                  type_str="str",
-                  required_if=lambda: False,
-                  validator=lambda s: None if s in {"MAIN_NET", "KOVAN"} else "Invalid chain name.",
-                  default="MAIN_NET"),
-    "ethereum_token_list_url":
-        ConfigVar(key="ethereum_token_list_url",
-                  prompt="Specify token list url of a list available on https://tokenlists.org/ >>> ",
-                  type_str="str",
-                  required_if=lambda: global_config_map["ethereum_wallet"].value is not None,
-                  default="https://defi.cmc.eth.link/"),
-    # Whether or not to invoke cancel_all on exit if marketing making on a open order book DEX (e.g. Radar Relay)
-    "on_chain_cancel_on_exit":
-        ConfigVar(key="on_chain_cancel_on_exit",
-                  prompt="Would you like to cancel transactions on chain if using an open order books exchanges? >>> ",
-                  required_if=lambda: False,
-                  type_str="bool",
-                  default=False),
     "kill_switch_enabled":
         ConfigVar(key="kill_switch_enabled",
                   prompt="Would you like to enable the kill switch? (Yes/No) >>> ",
-                  required_if=paper_trade_disabled,
+                  required_if=lambda: False,
                   type_str="bool",
                   default=False,
                   validator=validate_bool),
@@ -215,12 +164,6 @@ main_config_map = {
                   prompt="Would you like to send error logs to hummingbot? (Yes/No) >>> ",
                   type_str="bool",
                   default=True),
-    "min_quote_order_amount":
-        ConfigVar(key="min_quote_order_amount",
-                  prompt=None,
-                  required_if=lambda: False,
-                  type_str="json",
-                  ),
     # Database options
     "db_engine":
         ConfigVar(key="db_engine",
@@ -258,32 +201,25 @@ main_config_map = {
                   type_str="str",
                   required_if=lambda: global_config_map.get("db_engine").value != "sqlite",
                   default="dbname"),
-    # other options
-    "0x_active_cancels":
-        ConfigVar(key="0x_active_cancels",
-                  prompt="Enable active order cancellations for 0x exchanges (warning: this costs gas)?  >>> ",
+    PMM_SCRIPT_ENABLED_KEY:
+        ConfigVar(key=PMM_SCRIPT_ENABLED_KEY,
+                  prompt="Would you like to enable PMM script feature? (Yes/No) >>> ",
                   type_str="bool",
                   default=False,
                   validator=validate_bool),
-    "script_enabled":
-        ConfigVar(key="script_enabled",
-                  prompt="Would you like to enable script feature? (Yes/No) >>> ",
-                  type_str="bool",
-                  default=False,
-                  validator=validate_bool),
-    "script_file_path":
-        ConfigVar(key="script_file_path",
-                  prompt='Enter path to your script file >>> ',
+    PMM_SCRIPT_FILE_PATH_KEY:
+        ConfigVar(key=PMM_SCRIPT_FILE_PATH_KEY,
+                  prompt='Enter path to your PMM script file >>> ',
                   type_str="str",
-                  required_if=lambda: global_config_map["script_enabled"].value,
-                  validator=validate_script_file_path),
+                  required_if=lambda: global_config_map[PMM_SCRIPT_ENABLED_KEY].value,
+                  validator=validate_pmm_script_file_path),
     "balance_asset_limit":
         ConfigVar(key="balance_asset_limit",
                   prompt="Use the `balance limit` command"
                          "e.g. balance limit [EXCHANGE] [ASSET] [AMOUNT]",
                   required_if=lambda: False,
                   type_str="json",
-                  default={exchange: None for exchange in settings.EXCHANGES}),
+                  default={exchange: None for exchange in AllConnectorSettings.get_exchange_names()}),
     "manual_gas_price":
         ConfigVar(key="manual_gas_price",
                   prompt="Enter fixed gas price (in Gwei) you want to use for Ethereum transactions >>> ",
@@ -302,29 +238,21 @@ main_config_map = {
                   type_str="str",
                   required_if=lambda: False,
                   default="5000"),
-    "heartbeat_enabled":
-        ConfigVar(key="heartbeat_enabled",
-                  prompt="Do you want to enable aggregated order and trade data collection? >>> ",
+    "anonymized_metrics_enabled":
+        ConfigVar(key="anonymized_metrics_enabled",
+                  prompt="Do you want to report aggregated, anonymized trade volume by exchange to "
+                         "Hummingbot Foundation? >>> ",
                   required_if=lambda: False,
                   type_str="bool",
                   validator=validate_bool,
                   default=True),
-    "heartbeat_interval_min":
-        ConfigVar(key="heartbeat_interval_min",
-                  prompt="How often do you want Hummingbot to send aggregated order and trade data (in minutes, "
-                         "e.g. enter 5 for once every 5 minutes)? >>> ",
+    "anonymized_metrics_interval_min":
+        ConfigVar(key="anonymized_metrics_interval_min",
+                  prompt="How often do you want to send the anonymized metrics (Enter 5 for 5 minutes)? >>> ",
                   required_if=lambda: False,
                   type_str="decimal",
                   validator=lambda v: validate_decimal(v, Decimal(0), inclusive=False),
                   default=Decimal("15")),
-    "binance_markets":
-        ConfigVar(key="binance_markets",
-                  prompt="Please enter binance markets (for trades/pnl reporting) separated by ',' "
-                         "e.g. RLC-USDT,RLC-BTC  >>> ",
-                  type_str="str",
-                  required_if=lambda: False,
-                  default="HARD-USDT,HARD-BTC,XEM-ETH,XEM-BTC,ALGO-USDT,ALGO-BTC,COTI-BNB,COTI-USDT,COTI-BTC,MFT-BNB,"
-                          "MFT-ETH,MFT-USDT,RLC-ETH,RLC-BTC,RLC-USDT"),
     "command_shortcuts":
         ConfigVar(key="command_shortcuts",
                   prompt=None,
@@ -377,6 +305,124 @@ main_config_map = {
                   validator=lambda v: validate_decimal(v, min_value=Decimal("0"), inclusive=False),
                   required_if=lambda: False,
                   default=Decimal("30")),
+    "tables_format":
+        ConfigVar(key="tables_format",
+                  prompt="What tabulate formatting to apply to the tables?"
+                         " [https://github.com/astanin/python-tabulate#table-format] >>> ",
+                  type_str="str",
+                  required_if=lambda: False,
+                  validator=lambda value: "Invalid format" if value not in tabulate_formats else None,
+                  default="psql"),
 }
 
-global_config_map = {**key_config_map, **main_config_map}
+key_config_map = connector_keys()
+
+color_config_map = {
+    # The variables below are usually not prompted during setup process
+    "top-pane":
+        ConfigVar(key="top-pane",
+                  prompt="What is the background color of the top pane? ",
+                  type_str="str",
+                  required_if=lambda: False,
+                  validator=validate_color,
+                  default="#000000"),
+    "bottom-pane":
+        ConfigVar(key="bottom-pane",
+                  prompt="What is the background color of the bottom pane? ",
+                  type_str="str",
+                  required_if=lambda: False,
+                  validator=validate_color,
+                  default="#000000"),
+    "output-pane":
+        ConfigVar(key="output-pane",
+                  prompt="What is the background color of the output pane? ",
+                  type_str="str",
+                  required_if=lambda: False,
+                  validator=validate_color,
+                  default="#282C2F"),
+    "input-pane":
+        ConfigVar(key="input-pane",
+                  prompt="What is the background color of the input pane? ",
+                  type_str="str",
+                  required_if=lambda: False,
+                  validator=validate_color,
+                  default="#151819"),
+    "logs-pane":
+        ConfigVar(key="logs-pane",
+                  prompt="What is the background color of the logs pane? ",
+                  type_str="str",
+                  required_if=lambda: False,
+                  validator=validate_color,
+                  default="#151819"),
+    "terminal-primary":
+        ConfigVar(key="terminal-primary",
+                  prompt="What is the terminal primary color? ",
+                  type_str="str",
+                  required_if=lambda: False,
+                  validator=validate_color,
+                  default="#00FFE5"),
+    "primary-label":
+        ConfigVar(key="primary-label",
+                  prompt="What is the background color for primary label? ",
+                  type_str="str",
+                  required_if=lambda: False,
+                  validator=validate_color,
+                  default="#5FFFD7"),
+    "secondary-label":
+        ConfigVar(key="secondary-label",
+                  prompt="What is the background color for secondary label? ",
+                  type_str="str",
+                  required_if=lambda: False,
+                  validator=validate_color,
+                  default="#FFFFFF"),
+    "success-label":
+        ConfigVar(key="success-label",
+                  prompt="What is the background color for success label? ",
+                  type_str="str",
+                  required_if=lambda: False,
+                  validator=validate_color,
+                  default="#5FFFD7"),
+    "warning-label":
+        ConfigVar(key="warning-label",
+                  prompt="What is the background color for warning label? ",
+                  type_str="str",
+                  required_if=lambda: False,
+                  validator=validate_color,
+                  default="#FFFF00"),
+    "info-label":
+        ConfigVar(key="info-label",
+                  prompt="What is the background color for info label? ",
+                  type_str="str",
+                  required_if=lambda: False,
+                  validator=validate_color,
+                  default="#5FD7FF"),
+    "error-label":
+        ConfigVar(key="error-label",
+                  prompt="What is the background color for error label? ",
+                  type_str="str",
+                  required_if=lambda: False,
+                  validator=validate_color,
+                  default="#FF0000"),
+}
+
+paper_trade_config_map = {
+    "paper_trade_exchanges":
+        ConfigVar(key="paper_trade_exchanges",
+                  prompt=None,
+                  required_if=lambda: False,
+                  default=["binance",
+                           "kucoin",
+                           "ascend_ex",
+                           "gate_io",
+                           ],
+                  type_str="list"),
+    "paper_trade_account_balance":
+        ConfigVar(key="paper_trade_account_balance",
+                  prompt="Enter paper trade balance settings (Input must be valid json: "
+                         "e.g. {\"ETH\": 10, \"USDC\": 50000}) >>> ",
+                  required_if=lambda: False,
+                  type_str="json",
+                  ),
+}
+
+global_config_map = {**key_config_map, **main_config_map, **color_config_map, **paper_trade_config_map}

@@ -1,4 +1,3 @@
-import asyncio
 import logging
 from decimal import Decimal
 import ruamel.yaml
@@ -9,7 +8,7 @@ from os.path import (
     join,
     isfile
 )
-from collections import OrderedDict
+from collections import OrderedDict, defaultdict
 import json
 from typing import (
     Any,
@@ -23,7 +22,7 @@ import shutil
 
 from hummingbot.client.config.config_var import ConfigVar
 from hummingbot.client.config.global_config_map import global_config_map
-from hummingbot.client.config.fee_overrides_config_map import fee_overrides_config_map
+from hummingbot.client.config.fee_overrides_config_map import fee_overrides_config_map, init_fee_overrides_config
 from hummingbot.client.settings import (
     GLOBAL_CONFIG_PATH,
     TRADE_FEES_CONFIG_PATH,
@@ -31,12 +30,10 @@ from hummingbot.client.settings import (
     CONF_FILE_PATH,
     CONF_POSTFIX,
     CONF_PREFIX,
-    CONNECTOR_SETTINGS
+    AllConnectorSettings,
 )
 from hummingbot.client.config.security import Security
-from hummingbot.core.utils.market_price import get_last_price
 from hummingbot import get_strategy_list
-from eth_account import Account
 
 # Use ruamel.yaml to preserve order and comments in .yml file
 yaml_parser = ruamel.yaml.YAML()
@@ -101,7 +98,7 @@ def parse_cvar_value(cvar: ConfigVar, value: Any) -> Any:
 def cvar_json_migration(cvar: ConfigVar, cvar_value: Any) -> Any:
     """
     A special function to migrate json config variable when its json type changes, for paper_trade_account_balance
-    and min_quote_order_amount, they were List but change to Dict.
+    and min_quote_order_amount (deprecated), they were List but change to Dict.
     """
     if cvar.key in ("paper_trade_account_balance", "min_quote_order_amount") and isinstance(cvar_value, List):
         results = {}
@@ -154,15 +151,6 @@ def get_strategy_template_path(strategy: str) -> str:
     return join(TEMPLATE_PATH, f"{CONF_PREFIX}{strategy}{CONF_POSTFIX}_TEMPLATE.yml")
 
 
-def get_eth_wallet_private_key() -> Optional[str]:
-    ethereum_wallet = global_config_map.get("ethereum_wallet").value
-    if ethereum_wallet is None or ethereum_wallet == "":
-        return None
-    private_key = Security._private_keys[ethereum_wallet]
-    account = Account.privateKeyToAccount(private_key)
-    return account.privateKey.hex()
-
-
 def _merge_dicts(*args: Dict[str, ConfigVar]) -> OrderedDict:
     """
     Helper function to merge a few dictionaries into an ordered dictionary.
@@ -174,7 +162,7 @@ def _merge_dicts(*args: Dict[str, ConfigVar]) -> OrderedDict:
 
 
 def get_connector_class(connector_name: str) -> Callable:
-    conn_setting = CONNECTOR_SETTINGS[connector_name]
+    conn_setting = AllConnectorSettings.get_connector_settings()[connector_name]
     mod = __import__(conn_setting.module_path(),
                      fromlist=[conn_setting.class_name()])
     return getattr(mod, conn_setting.class_name())
@@ -189,8 +177,8 @@ def get_strategy_config_map(strategy: str) -> Optional[Dict[str, ConfigVar]]:
         strategy_module = __import__(f"hummingbot.strategy.{strategy}.{cm_key}",
                                      fromlist=[f"hummingbot.strategy.{strategy}"])
         return getattr(strategy_module, cm_key)
-    except Exception as e:
-        logging.getLogger().error(e, exc_info=True)
+    except Exception:
+        return defaultdict()
 
 
 def get_strategy_starter_file(strategy: str) -> Callable:
@@ -241,11 +229,35 @@ async def update_strategy_config_map_from_file(yml_path: str) -> str:
     return strategy
 
 
-async def load_yml_into_cm(yml_path: str, template_file_path: str, cm: Dict[str, ConfigVar]):
-    try:
+async def load_yml_into_dict(yml_path: str) -> Dict[str, Any]:
+    data = {}
+    if isfile(yml_path):
         with open(yml_path) as stream:
             data = yaml_parser.load(stream) or {}
-            conf_version = data.get("template_version", 0)
+
+    return dict(data.items())
+
+
+async def save_yml_from_dict(yml_path: str, conf_dict: Dict[str, Any]):
+    try:
+        with open(yml_path, "w+") as stream:
+            data = yaml_parser.load(stream) or {}
+            for key in conf_dict:
+                data[key] = conf_dict.get(key)
+            with open(yml_path, "w+") as outfile:
+                yaml_parser.dump(data, outfile)
+    except Exception as e:
+        logging.getLogger().error(f"Error writing configs: {str(e)}", exc_info=True)
+
+
+async def load_yml_into_cm(yml_path: str, template_file_path: str, cm: Dict[str, ConfigVar]):
+    try:
+        data = {}
+        conf_version = -1
+        if isfile(yml_path):
+            with open(yml_path) as stream:
+                data = yaml_parser.load(stream) or {}
+                conf_version = data.get("template_version", 0)
 
         with open(template_file_path, "r") as template_fd:
             template_data = yaml_parser.load(template_fd)
@@ -265,7 +277,7 @@ async def load_yml_into_cm(yml_path: str, template_file_path: str, cm: Dict[str,
                 cvar.value = Security.decrypted_value(key)
                 continue
 
-            val_in_file = data.get(key)
+            val_in_file = data.get(key, None)
             if (val_in_file is None or val_in_file == "") and cvar.default is not None:
                 cvar.value = cvar.default
                 continue
@@ -276,7 +288,9 @@ async def load_yml_into_cm(yml_path: str, template_file_path: str, cm: Dict[str,
                 err_msg = await cvar.validate(str(cvar.value))
                 if err_msg is not None:
                     # Instead of raising an exception, simply skip over this variable and wait till the user is prompted
-                    logging.getLogger().error("Invalid value %s for config variable %s" % (val_in_file, cvar.key))
+                    logging.getLogger().error(
+                        "Invalid value %s for config variable %s: %s" % (val_in_file, cvar.key, err_msg)
+                    )
                     cvar.value = None
 
         if conf_version < template_version:
@@ -306,6 +320,15 @@ async def read_system_configs_from_yml():
 
 def save_system_configs_to_yml():
     save_to_yml(GLOBAL_CONFIG_PATH, global_config_map)
+    save_to_yml(TRADE_FEES_CONFIG_PATH, fee_overrides_config_map)
+
+
+async def refresh_trade_fees_config():
+    """
+    Refresh the trade fees config, after new connectors have been added (e.g. gateway connectors).
+    """
+    init_fee_overrides_config()
+    await load_yml_into_cm(GLOBAL_CONFIG_PATH, join(TEMPLATE_PATH, "conf_global_TEMPLATE.yml"), global_config_map)
     save_to_yml(TRADE_FEES_CONFIG_PATH, fee_overrides_config_map)
 
 
@@ -365,30 +388,6 @@ async def create_yml_files():
                         pass
                 if conf_version < template_version:
                     shutil.copy(template_path, conf_path)
-
-
-def default_min_quote(quote_asset: str) -> (str, Decimal):
-    result_quote, result_amount = "USD", Decimal("11")
-    min_quote_config = global_config_map["min_quote_order_amount"].value
-    if min_quote_config is not None and quote_asset in min_quote_config:
-        result_quote, result_amount = quote_asset, Decimal(str(min_quote_config[quote_asset]))
-    return result_quote, result_amount
-
-
-async def minimum_order_amount(exchange: str, trading_pair: str) -> Decimal:
-    base_asset, quote_asset = trading_pair.split("-")
-    default_quote_asset, default_amount = default_min_quote(quote_asset)
-    quote_amount = Decimal("0")
-    if default_quote_asset == quote_asset:
-        timeout = float(global_config_map["create_command_timeout"].value)
-        try:
-            mid_price = await asyncio.wait_for(get_last_price(exchange, trading_pair), timeout)
-        except asyncio.TimeoutError:
-            quote_amount = Decimal("0")
-        else:
-            if mid_price is not None:
-                quote_amount = default_amount / mid_price
-    return round(quote_amount, 4)
 
 
 def default_strategy_file_path(strategy: str) -> str:

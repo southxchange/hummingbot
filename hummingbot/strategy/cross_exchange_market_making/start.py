@@ -31,10 +31,11 @@ def start(self):
     use_oracle_conversion_rate = xemm_map.get("use_oracle_conversion_rate").value
     taker_to_maker_base_conversion_rate = xemm_map.get("taker_to_maker_base_conversion_rate").value
     taker_to_maker_quote_conversion_rate = xemm_map.get("taker_to_maker_quote_conversion_rate").value
+    slippage_buffer = xemm_map.get("slippage_buffer").value / Decimal("100")
 
     # check if top depth tolerance is a list or if trade size override exists
     if isinstance(top_depth_tolerance, list) or "trade_size_override" in xemm_map:
-        self._notify("Current config is not compatible with cross exchange market making strategy. Please reconfigure")
+        self.notify("Current config is not compatible with cross exchange market making strategy. Please reconfigure")
         return
 
     try:
@@ -43,7 +44,7 @@ def start(self):
         maker_assets: Tuple[str, str] = self._initialize_market_assets(maker_market, [maker_trading_pair])[0]
         taker_assets: Tuple[str, str] = self._initialize_market_assets(taker_market, [taker_trading_pair])[0]
     except ValueError as e:
-        self._notify(str(e))
+        self.notify(str(e))
         return
 
     market_names: List[Tuple[str, List[str]]] = [
@@ -51,9 +52,7 @@ def start(self):
         (taker_market, [taker_trading_pair]),
     ]
 
-    self._initialize_wallet(token_trading_pairs=list(set(maker_assets + taker_assets)))
     self._initialize_markets(market_names)
-    self.assets = set(maker_assets + taker_assets)
     maker_data = [self.markets[maker_market], maker_trading_pair] + list(maker_assets)
     taker_data = [self.markets[taker_market], taker_trading_pair] + list(taker_assets)
     maker_market_trading_pair_tuple = MarketTradingPairTuple(*maker_data)
@@ -88,5 +87,6 @@ def start(self):
         use_oracle_conversion_rate=use_oracle_conversion_rate,
         taker_to_maker_base_conversion_rate=taker_to_maker_base_conversion_rate,
         taker_to_maker_quote_conversion_rate=taker_to_maker_quote_conversion_rate,
+        slippage_buffer=slippage_buffer,
         hb_app_notification=True,
     )

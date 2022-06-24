@@ -1,42 +1,43 @@
 #!/usr/bin/env python
 
 import asyncio
-from collections import deque
 import logging
 import time
-from typing import List, Dict, Optional, Tuple, Set, Deque
+from collections import deque
+from typing import Deque, Dict, List, Optional, Tuple
 
 from hummingbot.client.command import __all__ as commands
+from hummingbot.client.config.config_helpers import (
+    get_connector_class,
+    get_strategy_config_map,
+)
+from hummingbot.client.config.global_config_map import global_config_map
+from hummingbot.client.config.security import Security
+from hummingbot.client.settings import AllConnectorSettings, ConnectorType
+from hummingbot.client.tab import __all__ as tab_classes
+from hummingbot.client.tab.data_types import CommandTab
+from hummingbot.client.ui.completer import load_completer
+from hummingbot.client.ui.hummingbot_cli import HummingbotCLI
+from hummingbot.client.ui.keybindings import load_key_bindings
+from hummingbot.client.ui.parser import load_parser, ThrowingArgumentParser
+from hummingbot.connector.exchange.paper_trade import create_paper_trade_market
+from hummingbot.connector.exchange_base import ExchangeBase
+from hummingbot.connector.markets_recorder import MarketsRecorder
 from hummingbot.core.clock import Clock
+from hummingbot.core.gateway.status_monitor import StatusMonitor as GatewayStatusMonitor
+from hummingbot.core.utils.kill_switch import KillSwitch
+from hummingbot.core.utils.trading_pair_fetcher import TradingPairFetcher
+from hummingbot.data_feed.data_feed_base import DataFeedBase
 from hummingbot.exceptions import ArgumentParserError
 from hummingbot.logger import HummingbotLogger
 from hummingbot.logger.application_warning import ApplicationWarning
 from hummingbot.model.sql_connection_manager import SQLConnectionManager
-from hummingbot.connector.exchange.paper_trade import create_paper_trade_market
-from hummingbot.wallet.ethereum.ethereum_chain import EthereumChain
-from hummingbot.wallet.ethereum.web3_wallet import Web3Wallet
-from hummingbot.client.ui.keybindings import load_key_bindings
-from hummingbot.client.ui.parser import load_parser, ThrowingArgumentParser
-from hummingbot.client.ui.hummingbot_cli import HummingbotCLI
-from hummingbot.client.ui.completer import load_completer
-from hummingbot.client.config.global_config_map import global_config_map, using_wallet
-from hummingbot.client.config.config_helpers import (
-    get_strategy_config_map,
-    get_connector_class,
-    get_eth_wallet_private_key,
-)
-from hummingbot.strategy.strategy_base import StrategyBase
-from hummingbot.strategy.cross_exchange_market_making import CrossExchangeMarketPair
-from hummingbot.core.utils.kill_switch import KillSwitch
-from hummingbot.core.utils.trading_pair_fetcher import TradingPairFetcher
-from hummingbot.data_feed.data_feed_base import DataFeedBase
 from hummingbot.notifier.notifier_base import NotifierBase
 from hummingbot.notifier.telegram_notifier import TelegramNotifier
+from hummingbot.strategy.cross_exchange_market_making import CrossExchangeMarketPair
 from hummingbot.strategy.market_trading_pair_tuple import MarketTradingPairTuple
-from hummingbot.connector.markets_recorder import MarketsRecorder
-from hummingbot.client.config.security import Security
-from hummingbot.connector.exchange_base import ExchangeBase
-from hummingbot.client.settings import CONNECTOR_SETTINGS, ConnectorType
+from hummingbot.strategy.strategy_base import StrategyBase
+
 s_logger = None
 
 
@@ -63,14 +64,8 @@ class HummingbotApplication(*commands):
     def __init__(self):
         # This is to start fetching trading pairs for auto-complete
         TradingPairFetcher.get_instance()
-        self.ev_loop: asyncio.BaseEventLoop = asyncio.get_event_loop()
-        self.parser: ThrowingArgumentParser = load_parser(self)
-        self.app = HummingbotCLI(
-            input_handler=self._handle_command, bindings=load_key_bindings(self), completer=load_completer(self)
-        )
-
+        self.ev_loop: asyncio.AbstractEventLoop = asyncio.get_event_loop()
         self.markets: Dict[str, ExchangeBase] = {}
-        self.wallet: Optional[Web3Wallet] = None
         # strategy file name and name get assigned value after import or create command
         self._strategy_file_name: str = None
         self.strategy_name: str = None
@@ -84,7 +79,6 @@ class HummingbotApplication(*commands):
 
         self.init_time: float = time.time()
         self.start_time: Optional[int] = None
-        self.assets: Optional[Set[str]] = set()
         self.placeholder_mode = False
         self.log_queue_listener: Optional[logging.handlers.QueueListener] = None
         self.data_feed: Optional[DataFeedBase] = None
@@ -96,11 +90,27 @@ class HummingbotApplication(*commands):
 
         self.trade_fill_db: Optional[SQLConnectionManager] = None
         self.markets_recorder: Optional[MarketsRecorder] = None
-        self._script_iterator = None
+        self._pmm_script_iterator = None
         self._binance_connector = None
-
-        # gateway variables
         self._shared_client = None
+
+        # gateway variables and monitor
+        self._gateway_monitor = GatewayStatusMonitor(self)
+
+        command_tabs = self.init_command_tabs()
+        self.parser: ThrowingArgumentParser = load_parser(self, command_tabs)
+        self.app = HummingbotCLI(
+            input_handler=self._handle_command,
+            bindings=load_key_bindings(self),
+            completer=load_completer(self),
+            command_tabs=command_tabs
+        )
+
+        self._init_gateway_monitor()
+
+    @property
+    def gateway_config_keys(self) -> List[str]:
+        return self._gateway_monitor.gateway_config_keys
 
     @property
     def strategy_file_name(self) -> str:
@@ -121,7 +131,16 @@ class HummingbotApplication(*commands):
             return get_strategy_config_map(self.strategy_name)
         return None
 
-    def _notify(self, msg: str):
+    def _init_gateway_monitor(self):
+        try:
+            # Do not start the gateway monitor during unit tests.
+            if asyncio.get_running_loop() is not None:
+                self._gateway_monitor = GatewayStatusMonitor(self)
+                self._gateway_monitor.start()
+        except RuntimeError:
+            pass
+
+    def notify(self, msg: str):
         self.app.log(msg)
         for notifier in self.notifiers:
             notifier.add_msg_to_queue(msg)
@@ -131,12 +150,23 @@ class HummingbotApplication(*commands):
         if self.app.to_stop_config:
             self.app.to_stop_config = False
 
-        raw_command = raw_command.lower().strip()
-        command_split = raw_command.split()
+        raw_command = raw_command.strip()
+        # NOTE: Only done for config command
+        if raw_command.startswith("config"):
+            command_split = raw_command.split(maxsplit=2)
+        else:
+            command_split = raw_command.split()
         try:
             if self.placeholder_mode:
                 pass
+            elif len(command_split) == 0:
+                pass
             else:
+                # Check if help is requested, if yes, print & terminate
+                if len(command_split) > 1 and any(arg in ["-h", "--help"] for arg in command_split[1:]):
+                    self.help(raw_command)
+                    return
+
                 shortcuts = global_config_map.get("command_shortcuts").value
                 shortcut = None
                 # see if we match against shortcut command
@@ -159,46 +189,41 @@ class HummingbotApplication(*commands):
                             for i in range(1, num_shortcut_args + 1):
                                 final_cmd = final_cmd.replace(f'${i}', command_split[i])
                             if verbose is True:
-                                self._notify(f'  >>> {final_cmd}')
+                                self.notify(f'  >>> {final_cmd}')
                             self._handle_command(final_cmd)
                     else:
-                        self._notify('Invalid number of arguments for shortcut')
+                        self.notify('Invalid number of arguments for shortcut')
                 # regular command
                 else:
                     args = self.parser.parse_args(args=command_split)
                     kwargs = vars(args)
                     if not hasattr(args, "func"):
-                        return
-                    f = args.func
-                    del kwargs["func"]
-                    f(**kwargs)
+                        self.app.handle_tab_command(self, command_split[0], kwargs)
+                    else:
+                        f = args.func
+                        del kwargs["func"]
+                        f(**kwargs)
         except ArgumentParserError as e:
             if not self.be_silly(raw_command):
-                self._notify(str(e))
+                self.notify(str(e))
         except NotImplementedError:
-            self._notify("Command not yet implemented. This feature is currently under development.")
+            self.notify("Command not yet implemented. This feature is currently under development.")
         except Exception as e:
             self.logger().error(e, exc_info=True)
 
     async def _cancel_outstanding_orders(self) -> bool:
         success = True
         try:
-            on_chain_cancel_on_exit = global_config_map.get("on_chain_cancel_on_exit").value
-            bamboo_relay_use_coordinator = global_config_map.get("bamboo_relay_use_coordinator").value
             kill_timeout: float = self.KILL_TIMEOUT
-            self._notify("Cancelling outstanding orders...")
+            self.notify("Canceling outstanding orders...")
 
             for market_name, market in self.markets.items():
-                # By default, the bot does not cancel orders on exit on Radar Relay or Bamboo Relay,
-                # since all open orders will expire in a short window
-                if not on_chain_cancel_on_exit and (market_name == "radar_relay" or (market_name == "bamboo_relay" and not bamboo_relay_use_coordinator)):
-                    continue
                 cancellation_results = await market.cancel_all(kill_timeout)
                 uncancelled = list(filter(lambda cr: cr.success is False, cancellation_results))
                 if len(uncancelled) > 0:
                     success = False
                     uncancelled_order_ids = list(map(lambda cr: cr.order_id, uncancelled))
-                    self._notify("\nFailed to cancel the following orders on %s:\n%s" % (
+                    self.notify("\nFailed to cancel the following orders on %s:\n%s" % (
                         market_name,
                         '\n'.join(uncancelled_order_ids)
                     ))
@@ -207,7 +232,7 @@ class HummingbotApplication(*commands):
             success = False
 
         if success:
-            self._notify("All outstanding orders cancelled.")
+            self.notify("All outstanding orders canceled.")
         return success
 
     async def run(self):
@@ -225,29 +250,6 @@ class HummingbotApplication(*commands):
         market_trading_pairs: List[Tuple[str, str]] = [(trading_pair.split('-')) for trading_pair in trading_pairs]
         return market_trading_pairs
 
-    def _initialize_wallet(self, token_trading_pairs: List[str]):
-        # Todo: This function should be removed as it's currently not used by current working connectors
-
-        if not using_wallet():
-            return
-        # Commented this out for now since get_erc20_token_addresses uses blocking call
-
-        # if not self.token_list:
-        #     self.token_list = get_erc20_token_addresses()
-
-        ethereum_wallet = global_config_map.get("ethereum_wallet").value
-        private_key = Security._private_keys[ethereum_wallet]
-        ethereum_rpc_url = global_config_map.get("ethereum_rpc_url").value
-        erc20_token_addresses = {t: l[0] for t, l in self.token_list.items() if t in token_trading_pairs}
-
-        chain_name: str = global_config_map.get("ethereum_chain_name").value
-        self.wallet: Web3Wallet = Web3Wallet(
-            private_key=private_key,
-            backend_urls=[ethereum_rpc_url],
-            erc20_token_addresses=erc20_token_addresses,
-            chain=getattr(EthereumChain, chain_name),
-        )
-
     def _initialize_markets(self, market_names: List[Tuple[str, List[str]]]):
         # aggregate trading_pairs if there are duplicate markets
 
@@ -258,27 +260,20 @@ class HummingbotApplication(*commands):
                 self.market_trading_pairs_map[market_name].append(hb_trading_pair)
 
         for connector_name, trading_pairs in self.market_trading_pairs_map.items():
-            conn_setting = CONNECTOR_SETTINGS[connector_name]
-            if global_config_map.get("paper_trade_enabled").value and conn_setting.type == ConnectorType.Exchange:
-                connector = create_paper_trade_market(connector_name, trading_pairs)
+            conn_setting = AllConnectorSettings.get_connector_settings()[connector_name]
+
+            if connector_name.endswith("paper_trade") and conn_setting.type == ConnectorType.Exchange:
+                connector = create_paper_trade_market(conn_setting.parent_name, trading_pairs)
                 paper_trade_account_balance = global_config_map.get("paper_trade_account_balance").value
-                for asset, balance in paper_trade_account_balance.items():
-                    connector.set_balance(asset, balance)
+                if paper_trade_account_balance is not None:
+                    for asset, balance in paper_trade_account_balance.items():
+                        connector.set_balance(asset, balance)
             else:
                 Security.update_config_map(global_config_map)
                 keys = {key: config.value for key, config in global_config_map.items()
                         if key in conn_setting.config_keys}
                 init_params = conn_setting.conn_init_parameters(keys)
                 init_params.update(trading_pairs=trading_pairs, trading_required=self._trading_required)
-                if conn_setting.use_ethereum_wallet:
-                    ethereum_rpc_url = global_config_map.get("ethereum_rpc_url").value
-                    # Todo: Hard coded this execption for now until we figure out how to handle all ethereum connectors.
-                    if connector_name in ["balancer", "uniswap", "uniswap_v3", "perpetual_finance"]:
-                        private_key = get_eth_wallet_private_key()
-                        init_params.update(wallet_private_key=private_key, ethereum_rpc_url=ethereum_rpc_url)
-                    else:
-                        assert self.wallet is not None
-                        init_params.update(wallet=self.wallet, ethereum_rpc_url=ethereum_rpc_url)
                 connector_class = get_connector_class(connector_name)
                 connector = connector_class(**init_params)
             self.markets[connector_name] = connector
@@ -304,3 +299,14 @@ class HummingbotApplication(*commands):
                 )
         for notifier in self.notifiers:
             notifier.start()
+
+    def init_command_tabs(self) -> Dict[str, CommandTab]:
+        """
+        Initiates and returns a CommandTab dictionary with mostly defaults and None values, These values will be
+        populated later on by HummingbotCLI
+        """
+        command_tabs: Dict[str, CommandTab] = {}
+        for tab_class in tab_classes:
+            name = tab_class.get_command_name()
+            command_tabs[name] = CommandTab(name, None, None, None, tab_class)
+        return command_tabs

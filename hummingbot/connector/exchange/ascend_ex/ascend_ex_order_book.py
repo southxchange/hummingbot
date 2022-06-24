@@ -1,19 +1,10 @@
-#!/usr/bin/env python
-
 import logging
+from typing import Any, Dict, List, Optional
+
 import hummingbot.connector.exchange.ascend_ex.ascend_ex_constants as constants
-
-from sqlalchemy.engine import RowProxy
-from typing import (
-    Optional,
-    Dict,
-    List, Any)
-
-from hummingbot.core.data_type.order_book import OrderBook
-from hummingbot.core.data_type.order_book_message import (
-    OrderBookMessage, OrderBookMessageType
-)
 from hummingbot.connector.exchange.ascend_ex.ascend_ex_order_book_message import AscendExOrderBookMessage
+from hummingbot.core.data_type.order_book import OrderBook
+from hummingbot.core.data_type.order_book_message import OrderBookMessage, OrderBookMessageType
 from hummingbot.logger import HummingbotLogger
 
 _logger = None
@@ -49,20 +40,6 @@ class AscendExOrderBook(OrderBook):
         )
 
     @classmethod
-    def snapshot_message_from_db(cls, record: RowProxy, metadata: Optional[Dict] = None):
-        """
-        *used for backtesting
-        Convert a row of snapshot data into standard OrderBookMessage format
-        :param record: a row of snapshot data from the database
-        :return: AscendExOrderBookMessage
-        """
-        return AscendExOrderBookMessage(
-            message_type=OrderBookMessageType.SNAPSHOT,
-            content=record.json,
-            timestamp=record.timestamp
-        )
-
-    @classmethod
     def diff_message_from_exchange(cls,
                                    msg: Dict[str, any],
                                    timestamp: Optional[float] = None,
@@ -71,6 +48,8 @@ class AscendExOrderBook(OrderBook):
         Convert json diff data into standard OrderBookMessage format
         :param msg: json diff data from live web socket stream
         :param timestamp: timestamp attached to incoming data
+        :param metadata: a dictionary with extra information to add to diff message
+
         :return: AscendExOrderBookMessage
         """
 
@@ -84,28 +63,18 @@ class AscendExOrderBook(OrderBook):
         )
 
     @classmethod
-    def diff_message_from_db(cls, record: RowProxy, metadata: Optional[Dict] = None):
-        """
-        *used for backtesting
-        Convert a row of diff data into standard OrderBookMessage format
-        :param record: a row of diff data from the database
-        :return: AscendExOrderBookMessage
-        """
-        return AscendExOrderBookMessage(
-            message_type=OrderBookMessageType.DIFF,
-            content=record.json,
-            timestamp=record.timestamp
-        )
-
-    @classmethod
     def trade_message_from_exchange(cls,
                                     msg: Dict[str, Any],
                                     timestamp: Optional[float] = None,
                                     metadata: Optional[Dict] = None):
         """
-        Convert a trade data into standard OrderBookMessage format
-        :param record: a trade data from the database
-        :return: AscendExOrderBookMessage
+        Creates a trade message with the information from the trade event sent by the exchange
+
+        :param msg: the trade event details sent by the exchange
+        :param timestamp: timestamp attached to incoming data
+        :param metadata: a dictionary with extra information to add to trade message
+
+        :return: a trade message with the details of the trade as provided by the exchange
         """
 
         if metadata:
@@ -122,20 +91,6 @@ class AscendExOrderBook(OrderBook):
             message_type=OrderBookMessageType.TRADE,
             content=msg,
             timestamp=timestamp
-        )
-
-    @classmethod
-    def trade_message_from_db(cls, record: RowProxy, metadata: Optional[Dict] = None):
-        """
-        *used for backtesting
-        Convert a row of trade data into standard OrderBookMessage format
-        :param record: a row of trade data from the database
-        :return: AscendExOrderBookMessage
-        """
-        return AscendExOrderBookMessage(
-            message_type=OrderBookMessageType.TRADE,
-            content=record.json,
-            timestamp=record.timestamp
         )
 
     @classmethod

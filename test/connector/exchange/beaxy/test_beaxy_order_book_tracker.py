@@ -1,21 +1,14 @@
-#!/usr/bin/env python
-from os.path import (
-    join,
-    realpath
-)
-import sys; sys.path.insert(0, realpath(join(__file__, "../../../../../")))
-from hummingbot.core.event.event_logger import EventLogger
-from hummingbot.core.event.events import (
-    OrderBookEvent
-)
 import asyncio
 import logging
+import sys
 import unittest
 from typing import Dict, Optional, List
 
 from hummingbot.connector.exchange.beaxy.beaxy_order_book_tracker import BeaxyOrderBookTracker
 from hummingbot.core.data_type.order_book import OrderBook
 from hummingbot.core.data_type.order_book_tracker import OrderBookTrackerDataSource
+from hummingbot.core.event.event_logger import EventLogger
+from hummingbot.core.event.events import OrderBookEvent
 from hummingbot.core.utils.async_utils import safe_ensure_future, safe_gather
 
 
@@ -111,13 +104,6 @@ class BeaxyOrderBookTrackerUnitTest(unittest.TestCase):
 
     def test_order_book_data_source(self):
         self.assertTrue(isinstance(self.order_book_tracker.data_source, OrderBookTrackerDataSource))
-
-    def test_get_active_exchange_markets(self):
-        [active_markets_df] = self.run_parallel(self.order_book_tracker.data_source.get_active_exchange_markets())
-        self.assertGreater(active_markets_df.size, 0)
-        self.assertTrue("baseAsset" in active_markets_df)
-        self.assertTrue("quoteAsset" in active_markets_df)
-        self.assertTrue("USDVolume" in active_markets_df)
 
     def test_get_trading_pairs(self):
         [trading_pairs] = self.run_parallel(self.order_book_tracker.data_source.get_trading_pairs())

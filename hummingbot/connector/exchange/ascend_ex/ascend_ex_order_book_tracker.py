@@ -3,19 +3,18 @@ import asyncio
 import bisect
 import logging
 import time
+from collections import defaultdict, deque
+from typing import Deque, Dict, List, Optional
 
 import hummingbot.connector.exchange.ascend_ex.ascend_ex_constants as constants
-
-from collections import defaultdict, deque
-from typing import Optional, Dict, List, Deque
-
+from hummingbot.connector.exchange.ascend_ex.ascend_ex_api_order_book_data_source import AscendExAPIOrderBookDataSource
+from hummingbot.connector.exchange.ascend_ex.ascend_ex_order_book import AscendExOrderBook
+from hummingbot.connector.exchange.ascend_ex.ascend_ex_order_book_message import AscendExOrderBookMessage
 from hummingbot.core.api_throttler.async_throttler import AsyncThrottler
 from hummingbot.core.data_type.order_book_message import OrderBookMessageType
 from hummingbot.core.data_type.order_book_tracker import OrderBookTracker
-from hummingbot.connector.exchange.ascend_ex.ascend_ex_order_book_message import AscendExOrderBookMessage
-from hummingbot.connector.exchange.ascend_ex.ascend_ex_active_order_tracker import AscendExActiveOrderTracker
-from hummingbot.connector.exchange.ascend_ex.ascend_ex_api_order_book_data_source import AscendExAPIOrderBookDataSource
-from hummingbot.connector.exchange.ascend_ex.ascend_ex_order_book import AscendExOrderBook
+from hummingbot.core.utils.async_utils import safe_ensure_future
+from hummingbot.core.web_assistant.web_assistants_factory import WebAssistantsFactory
 from hummingbot.logger import HummingbotLogger
 
 
@@ -28,8 +27,20 @@ class AscendExOrderBookTracker(OrderBookTracker):
             cls._logger = logging.getLogger(__name__)
         return cls._logger
 
-    def __init__(self, throttler: Optional[AsyncThrottler] = None, trading_pairs: Optional[List[str]] = None):
-        super().__init__(AscendExAPIOrderBookDataSource(throttler, trading_pairs), trading_pairs)
+    def __init__(
+        self,
+        api_factory: Optional[WebAssistantsFactory] = None,
+        throttler: Optional[AsyncThrottler] = None,
+        trading_pairs: Optional[List[str]] = None,
+    ):
+        super().__init__(
+            AscendExAPIOrderBookDataSource(
+                api_factory=api_factory,
+                throttler=throttler,
+                trading_pairs=trading_pairs
+            ),
+            trading_pairs,
+        )
 
         self._ev_loop: asyncio.BaseEventLoop = asyncio.get_event_loop()
         self._order_book_snapshot_stream: asyncio.Queue = asyncio.Queue()
@@ -38,11 +49,9 @@ class AscendExOrderBookTracker(OrderBookTracker):
         self._process_msg_deque_task: Optional[asyncio.Task] = None
         self._past_diffs_windows: Dict[str, Deque] = {}
         self._order_books: Dict[str, AscendExOrderBook] = {}
-        self._saved_message_queues: Dict[str, Deque[AscendExOrderBookMessage]] = \
-            defaultdict(lambda: deque(maxlen=1000))
-        self._active_order_trackers: Dict[str, AscendExActiveOrderTracker] = defaultdict(AscendExActiveOrderTracker)
+        self._saved_message_queues: Dict[str, Deque[AscendExOrderBookMessage]] = defaultdict(lambda: deque(maxlen=1000))
+
         self._order_book_stream_listener_task: Optional[asyncio.Task] = None
-        self._order_book_trade_listener_task: Optional[asyncio.Task] = None
 
     @property
     def exchange_name(self) -> str:
@@ -50,6 +59,28 @@ class AscendExOrderBookTracker(OrderBookTracker):
         Name of the current exchange
         """
         return constants.EXCHANGE_NAME
+
+    def start(self):
+        """
+        Starts the background task that connects to the exchange and listens to order book updates and trade events.
+        """
+        super().start()
+        self._order_book_stream_listener_task = safe_ensure_future(
+            self._data_source.listen_for_subscriptions()
+        )
+
+    def stop(self):
+        """
+        Stops the background task
+        """
+        self._order_book_stream_listener_task and self._order_book_stream_listener_task.cancel()
+        super().stop()
+
+    async def _sleep(self, delay):
+        """
+        Function added only to facilitate patching the sleep in unit tests without affecting the asyncio module
+        """
+        await asyncio.sleep(delay)
 
     async def _track_single_book(self, trading_pair: str):
         """
@@ -103,6 +134,6 @@ class AscendExOrderBookTracker(OrderBookTracker):
                 self.logger().network(
                     f"Unexpected error processing order book messages for {trading_pair}.",
                     exc_info=True,
-                    app_warning_msg="Unexpected error processing order book messages. Retrying after 5 seconds."
+                    app_warning_msg="Unexpected error processing order book messages. Retrying after 5 seconds.",
                 )
-                await asyncio.sleep(5.0)
+                await self._sleep(5.0)

@@ -1,33 +1,28 @@
-#!/usr/bin/env python
-import unittest
 import asyncio
 import time
-
+import unittest
 from collections import deque
 from decimal import Decimal
 from typing import Union
 
-from hummingsim.backtest.backtest_market import BacktestMarket
-
-
+from hummingbot.core.data_type.common import OrderType, TradeType
 from hummingbot.core.data_type.limit_order import LimitOrder
 from hummingbot.core.data_type.market_order import MarketOrder
 from hummingbot.core.event.events import (
-    MarketEvent,
-    OrderType,
-    TradeType,
+    BuyOrderCompletedEvent,
     BuyOrderCreatedEvent,
-    SellOrderCreatedEvent,
-    OrderFilledEvent,
+    FundingPaymentCompletedEvent,
+    MarketEvent,
     MarketOrderFailureEvent,
     OrderCancelledEvent,
     OrderExpiredEvent,
-    BuyOrderCompletedEvent,
+    OrderFilledEvent,
     SellOrderCompletedEvent,
-    FundingPaymentCompletedEvent,
+    SellOrderCreatedEvent,
 )
 from hummingbot.strategy.market_trading_pair_tuple import MarketTradingPairTuple
 from hummingbot.strategy.strategy_py_base import StrategyPyBase
+from hummingbot.connector.mock.mock_paper_exchange import MockPaperExchange
 
 
 class MockPyStrategy(StrategyPyBase):
@@ -74,7 +69,7 @@ class StrategyPyBaseUnitTests(unittest.TestCase):
         cls.trading_pair = "COINALPHA-HBOT"
 
     def setUp(self):
-        self.market: BacktestMarket = BacktestMarket()
+        self.market: MockPaperExchange = MockPaperExchange()
         self.market_info: MarketTradingPairTuple = MarketTradingPairTuple(
             self.market, self.trading_pair, *self.trading_pair.split("-")
         )
@@ -95,7 +90,8 @@ class StrategyPyBaseUnitTests(unittest.TestCase):
                 order.trading_pair,
                 order.quantity if isinstance(order, LimitOrder) else order.amount,
                 order.price,
-                order.client_order_id if isinstance(order, LimitOrder) else order.order_id
+                order.client_order_id if isinstance(order, LimitOrder) else order.order_id,
+                time.time()
             )
         )
 
@@ -104,7 +100,7 @@ class StrategyPyBaseUnitTests(unittest.TestCase):
         market_info.market.trigger_event(
             MarketEvent.OrderFilled,
             OrderFilledEvent(
-                int(time.time() * 1e3),
+                time.time(),
                 order.client_order_id if isinstance(order, LimitOrder) else order.order_id,
                 order.trading_pair,
                 TradeType.BUY if order.is_buy else TradeType.SELL,
@@ -158,9 +154,7 @@ class StrategyPyBaseUnitTests(unittest.TestCase):
                 order.client_order_id if isinstance(order, LimitOrder) else order.order_id,
                 order.trading_pair.split("-")[0],
                 order.trading_pair.split("-")[1],
-                order.trading_pair.split("-")[0] if order.is_buy else order.trading_pair.split("-")[1],
                 Decimal("1") if order.is_buy else Decimal("0"),
-                Decimal("0") if order.is_buy else Decimal("1"),
                 Decimal("0") if order.is_buy else Decimal("1"),
                 OrderType.LIMIT if isinstance(order, LimitOrder) else OrderType.MARKET,
             )
@@ -195,13 +189,13 @@ class StrategyPyBaseUnitTests(unittest.TestCase):
         )
 
     def test_did_create_buy_order(self):
-        limit_order: limit_order = LimitOrder(client_order_id="test",
-                                              trading_pair=self.trading_pair,
-                                              is_buy=True,
-                                              base_currency=self.trading_pair.split("-")[0],
-                                              quote_currency=self.trading_pair.split("-")[1],
-                                              price=Decimal("100"),
-                                              quantity=Decimal("50"))
+        limit_order: LimitOrder = LimitOrder(client_order_id="test",
+                                             trading_pair=self.trading_pair,
+                                             is_buy=True,
+                                             base_currency=self.trading_pair.split("-")[0],
+                                             quote_currency=self.trading_pair.split("-")[1],
+                                             price=Decimal("100"),
+                                             quantity=Decimal("50"))
         self.simulate_order_created(self.market_info, limit_order)
 
         event = self.strategy.events_queue.popleft()
@@ -209,13 +203,13 @@ class StrategyPyBaseUnitTests(unittest.TestCase):
         self.assertIsInstance(event, BuyOrderCreatedEvent)
 
     def test_did_create_sell_order(self):
-        limit_order: limit_order = LimitOrder(client_order_id="test",
-                                              trading_pair=self.trading_pair,
-                                              is_buy=False,
-                                              base_currency=self.trading_pair.split("-")[0],
-                                              quote_currency=self.trading_pair.split("-")[1],
-                                              price=Decimal("100"),
-                                              quantity=Decimal("50"))
+        limit_order: LimitOrder = LimitOrder(client_order_id="test",
+                                             trading_pair=self.trading_pair,
+                                             is_buy=False,
+                                             base_currency=self.trading_pair.split("-")[0],
+                                             quote_currency=self.trading_pair.split("-")[1],
+                                             price=Decimal("100"),
+                                             quantity=Decimal("50"))
 
         self.simulate_order_created(self.market_info, limit_order)
 
@@ -224,13 +218,13 @@ class StrategyPyBaseUnitTests(unittest.TestCase):
         self.assertIsInstance(event, SellOrderCreatedEvent)
 
     def test_did_fill_order(self):
-        limit_order: limit_order = LimitOrder(client_order_id="test",
-                                              trading_pair=self.trading_pair,
-                                              is_buy=False,
-                                              base_currency=self.trading_pair.split("-")[0],
-                                              quote_currency=self.trading_pair.split("-")[1],
-                                              price=Decimal("100"),
-                                              quantity=Decimal("50"))
+        limit_order: LimitOrder = LimitOrder(client_order_id="test",
+                                             trading_pair=self.trading_pair,
+                                             is_buy=False,
+                                             base_currency=self.trading_pair.split("-")[0],
+                                             quote_currency=self.trading_pair.split("-")[1],
+                                             price=Decimal("100"),
+                                             quantity=Decimal("50"))
 
         self.simulate_order_filled(self.market_info, limit_order)
 
@@ -239,13 +233,13 @@ class StrategyPyBaseUnitTests(unittest.TestCase):
         self.assertIsInstance(event, OrderFilledEvent)
 
     def test_did_cancel_order(self):
-        limit_order: limit_order = LimitOrder(client_order_id="test",
-                                              trading_pair=self.trading_pair,
-                                              is_buy=True,
-                                              base_currency=self.trading_pair.split("-")[0],
-                                              quote_currency=self.trading_pair.split("-")[1],
-                                              price=Decimal("100"),
-                                              quantity=Decimal("50"))
+        limit_order: LimitOrder = LimitOrder(client_order_id="test",
+                                             trading_pair=self.trading_pair,
+                                             is_buy=True,
+                                             base_currency=self.trading_pair.split("-")[0],
+                                             quote_currency=self.trading_pair.split("-")[1],
+                                             price=Decimal("100"),
+                                             quantity=Decimal("50"))
 
         self.simulate_cancel_order(self.market_info, limit_order)
 
@@ -254,13 +248,13 @@ class StrategyPyBaseUnitTests(unittest.TestCase):
         self.assertIsInstance(event, OrderCancelledEvent)
 
     def test_did_fail_order(self):
-        limit_order: limit_order = LimitOrder(client_order_id="test",
-                                              trading_pair=self.trading_pair,
-                                              is_buy=False,
-                                              base_currency=self.trading_pair.split("-")[0],
-                                              quote_currency=self.trading_pair.split("-")[1],
-                                              price=Decimal("100"),
-                                              quantity=Decimal("50"))
+        limit_order: LimitOrder = LimitOrder(client_order_id="test",
+                                             trading_pair=self.trading_pair,
+                                             is_buy=False,
+                                             base_currency=self.trading_pair.split("-")[0],
+                                             quote_currency=self.trading_pair.split("-")[1],
+                                             price=Decimal("100"),
+                                             quantity=Decimal("50"))
 
         self.simulate_order_failed(self.market_info, limit_order)
 
@@ -269,13 +263,13 @@ class StrategyPyBaseUnitTests(unittest.TestCase):
         self.assertIsInstance(event, MarketOrderFailureEvent)
 
     def test_did_expire_order(self):
-        limit_order: limit_order = LimitOrder(client_order_id="test",
-                                              trading_pair=self.trading_pair,
-                                              is_buy=False,
-                                              base_currency=self.trading_pair.split("-")[0],
-                                              quote_currency=self.trading_pair.split("-")[1],
-                                              price=Decimal("100"),
-                                              quantity=Decimal("50"))
+        limit_order: LimitOrder = LimitOrder(client_order_id="test",
+                                             trading_pair=self.trading_pair,
+                                             is_buy=False,
+                                             base_currency=self.trading_pair.split("-")[0],
+                                             quote_currency=self.trading_pair.split("-")[1],
+                                             price=Decimal("100"),
+                                             quantity=Decimal("50"))
 
         self.simulate_order_expired(self.market_info, limit_order)
 
@@ -284,13 +278,13 @@ class StrategyPyBaseUnitTests(unittest.TestCase):
         self.assertIsInstance(event, OrderExpiredEvent)
 
     def test_did_complete_buy_order(self):
-        limit_order: limit_order = LimitOrder(client_order_id="test",
-                                              trading_pair=self.trading_pair,
-                                              is_buy=True,
-                                              base_currency=self.trading_pair.split("-")[0],
-                                              quote_currency=self.trading_pair.split("-")[1],
-                                              price=Decimal("100"),
-                                              quantity=Decimal("50"))
+        limit_order: LimitOrder = LimitOrder(client_order_id="test",
+                                             trading_pair=self.trading_pair,
+                                             is_buy=True,
+                                             base_currency=self.trading_pair.split("-")[0],
+                                             quote_currency=self.trading_pair.split("-")[1],
+                                             price=Decimal("100"),
+                                             quantity=Decimal("50"))
 
         self.simulate_order_completed(self.market_info, limit_order)
 
@@ -299,13 +293,13 @@ class StrategyPyBaseUnitTests(unittest.TestCase):
         self.assertIsInstance(event, BuyOrderCompletedEvent)
 
     def test_did_complete_sell_order(self):
-        limit_order: limit_order = LimitOrder(client_order_id="test",
-                                              trading_pair=self.trading_pair,
-                                              is_buy=False,
-                                              base_currency=self.trading_pair.split("-")[0],
-                                              quote_currency=self.trading_pair.split("-")[1],
-                                              price=Decimal("100"),
-                                              quantity=Decimal("50"))
+        limit_order: LimitOrder = LimitOrder(client_order_id="test",
+                                             trading_pair=self.trading_pair,
+                                             is_buy=False,
+                                             base_currency=self.trading_pair.split("-")[0],
+                                             quote_currency=self.trading_pair.split("-")[1],
+                                             price=Decimal("100"),
+                                             quantity=Decimal("50"))
 
         self.simulate_order_completed(self.market_info, limit_order)
 
@@ -314,7 +308,6 @@ class StrategyPyBaseUnitTests(unittest.TestCase):
         self.assertIsInstance(event, SellOrderCompletedEvent)
 
     def test_did_complete_funding_payment(self):
-
         self.simulate_funding_payment_completed(self.market_info)
 
         event = self.strategy.events_queue.popleft()

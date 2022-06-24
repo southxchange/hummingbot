@@ -1,25 +1,25 @@
-#!/usr/bin/env python
-from typing import List
-from decimal import Decimal
 import logging
-import pandas as pd
 import unittest
+from decimal import Decimal
+from typing import List
 
-from hummingbot.strategy.market_trading_pair_tuple import MarketTradingPairTuple
-from hummingsim.backtest.backtest_market import BacktestMarket
-from hummingsim.backtest.market import QuantizationParams
-from hummingsim.backtest.mock_order_book_loader import MockOrderBookLoader
+import pandas as pd
+
+from hummingbot.connector.exchange.paper_trade.paper_trade_exchange import QuantizationParams
 from hummingbot.core.clock import Clock, ClockMode
+from hummingbot.core.data_type.common import TradeType
+from hummingbot.core.data_type.order_book import OrderBook
+from hummingbot.core.data_type.order_book_row import OrderBookRow
 from hummingbot.core.event.event_logger import EventLogger
 from hummingbot.core.event.events import (
     MarketEvent,
     OrderBookTradeEvent,
-    TradeType
 )
-from hummingbot.strategy.pure_market_making.pure_market_making import PureMarketMakingStrategy
+from hummingbot.strategy.market_trading_pair_tuple import MarketTradingPairTuple
 from hummingbot.strategy.order_book_asset_price_delegate import OrderBookAssetPriceDelegate
-from hummingbot.core.data_type.order_book import OrderBook
-from hummingbot.core.data_type.order_book_row import OrderBookRow
+from hummingbot.strategy.pure_market_making.pure_market_making import PureMarketMakingStrategy
+from hummingbot.connector.mock.mock_paper_exchange import MockPaperExchange
+
 
 logging.basicConfig(level=logging.ERROR)
 
@@ -55,18 +55,17 @@ class PureMMTakeIfCrossUnitTest(unittest.TestCase):
     def setUp(self):
         self.clock_tick_size = 1
         self.clock: Clock = Clock(ClockMode.BACKTEST, self.clock_tick_size, self.start_timestamp, self.end_timestamp)
-        self.market: BacktestMarket = BacktestMarket()
-        self.book_data: MockOrderBookLoader = MockOrderBookLoader(self.trading_pair, self.base_asset, self.quote_asset)
+        self.market: MockPaperExchange = MockPaperExchange()
         self.mid_price = 100
         self.bid_spread = 0.01
         self.ask_spread = 0.01
         self.order_refresh_time = 30
-        self.book_data.set_balanced_order_book(mid_price=self.mid_price,
-                                               min_price=1,
-                                               max_price=200,
-                                               price_step_size=1,
-                                               volume_step_size=10)
-        self.market.add_data(self.book_data)
+        self.market.set_balanced_order_book(trading_pair=self.trading_pair,
+                                            mid_price=self.mid_price,
+                                            min_price=1,
+                                            max_price=200,
+                                            price_step_size=1,
+                                            volume_step_size=10)
         self.market.set_balance("HBOT", 500)
         self.market.set_balance("ETH", 5000)
         self.market.set_quantization_param(
@@ -82,14 +81,13 @@ class PureMMTakeIfCrossUnitTest(unittest.TestCase):
         self.market.add_listener(MarketEvent.OrderFilled, self.order_fill_logger)
         self.market.add_listener(MarketEvent.OrderCancelled, self.cancel_order_logger)
 
-        self.ext_market: BacktestMarket = BacktestMarket()
-        self.ext_data: MockOrderBookLoader = MockOrderBookLoader(self.trading_pair, self.base_asset, self.quote_asset)
+        self.ext_market: MockPaperExchange = MockPaperExchange()
         self.ext_market_info: MarketTradingPairTuple = MarketTradingPairTuple(
             self.ext_market, self.trading_pair, self.base_asset, self.quote_asset
         )
-        self.ext_data.set_balanced_order_book(mid_price=100, min_price=1, max_price=400, price_step_size=1,
-                                              volume_step_size=100)
-        self.ext_market.add_data(self.ext_data)
+        self.ext_market.set_balanced_order_book(trading_pair=self.trading_pair,
+                                                mid_price=100, min_price=1, max_price=400, price_step_size=1,
+                                                volume_step_size=100)
         self.order_book_asset_del = OrderBookAssetPriceDelegate(self.ext_market, self.trading_pair)
 
         self.one_level_strategy = PureMarketMakingStrategy()

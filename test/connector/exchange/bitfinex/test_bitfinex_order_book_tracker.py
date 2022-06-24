@@ -1,21 +1,17 @@
-#!/usr/bin/env python
-import math
-import time
-from os.path import join, realpath
-import sys
-from hummingbot.core.event.event_logger import EventLogger
-from hummingbot.core.event.events import OrderBookEvent, OrderBookTradeEvent, TradeType
-
 import asyncio
 import logging
-from typing import Dict, Optional, List
+import math
+import sys
+import time
 import unittest
+from typing import Dict, Optional, List
 
 from hummingbot.connector.exchange.bitfinex.bitfinex_order_book_tracker import BitfinexOrderBookTracker
+from hummingbot.core.data_type.common import TradeType
 from hummingbot.core.data_type.order_book import OrderBook
+from hummingbot.core.event.event_logger import EventLogger
+from hummingbot.core.event.events import OrderBookEvent, OrderBookTradeEvent
 from hummingbot.core.utils.async_utils import safe_ensure_future
-
-sys.path.insert(0, realpath(join(__file__, "../../../../../")))
 
 
 class BitfinexOrderBookTrackerUnitTest(unittest.TestCase):
@@ -151,14 +147,6 @@ class BitfinexOrderBookTrackerUnitTest(unittest.TestCase):
             if count > self.book_enties:
                 break
         self.assertLessEqual(total_volume, 10 * self.daily_volume)
-
-    def test_get_active_exchange_markets(self):
-        [data] = self.run_parallel(self.order_book_tracker.data_source.get_active_exchange_markets())
-
-        self.assertGreater(data.size, 0)
-        self.assertTrue("baseAsset" in data)
-        self.assertTrue("quoteAsset" in data)
-        self.assertTrue("USDVolume" in data)
 
 
 def main():

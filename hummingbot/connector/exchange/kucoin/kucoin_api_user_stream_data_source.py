@@ -1,34 +1,35 @@
-#!/usr/bin/env python
-
 import asyncio
-import aiohttp
 import logging
 import time
-from typing import (
-    AsyncIterable,
-    Dict,
-    Optional
-)
-import ujson
-import websockets
+from typing import Optional
 
+from hummingbot.connector.exchange.kucoin import (
+    kucoin_constants as CONSTANTS,
+    kucoin_web_utils as web_utils,
+)
 from hummingbot.core.api_throttler.async_throttler import AsyncThrottler
 from hummingbot.core.data_type.user_stream_tracker_data_source import UserStreamTrackerDataSource
-from hummingbot.connector.exchange.kucoin.kucoin_auth import KucoinAuth
+from hummingbot.core.web_assistant.connections.data_types import RESTMethod, WSRequest
+from hummingbot.core.web_assistant.web_assistants_factory import WebAssistantsFactory
+from hummingbot.core.web_assistant.ws_assistant import WSAssistant
 from hummingbot.logger import HummingbotLogger
-from hummingbot.connector.exchange.kucoin import kucoin_constants as CONSTANTS
-
-KUCOIN_PRIVATE_TOPICS = [
-    "/spotMarket/tradeOrders",
-    "/account/balance",
-]
 
 
 class KucoinAPIUserStreamDataSource(UserStreamTrackerDataSource):
-
     PING_TIMEOUT = 50.0
 
     _kausds_logger: Optional[HummingbotLogger] = None
+
+    def __init__(self,
+                 domain: str = CONSTANTS.DEFAULT_DOMAIN,
+                 api_factory: Optional[WebAssistantsFactory] = None,
+                 throttler: Optional[AsyncThrottler] = None):
+        super().__init__()
+        self._domain = domain
+        self._throttler = throttler
+        self._api_factory = api_factory
+        self._ws_assistant: Optional[WSAssistant] = None
+        self._last_ws_message_sent_timestamp = 0
 
     @classmethod
     def logger(cls) -> HummingbotLogger:
@@ -36,89 +37,117 @@ class KucoinAPIUserStreamDataSource(UserStreamTrackerDataSource):
             cls._kausds_logger = logging.getLogger(__name__)
         return cls._kausds_logger
 
-    def __init__(self, throttler: AsyncThrottler, kucoin_auth: KucoinAuth):
-        self._throttler = throttler
-        self._current_listen_key = None
-        self._current_endpoint = None
-        super().__init__()
-        self._kucoin_auth: KucoinAuth = kucoin_auth
-        self._last_recv_time: float = 0
-
     @property
     def last_recv_time(self) -> float:
-        return self._last_recv_time
+        """
+        Returns the time of the last received message
 
-    async def get_listen_key(self):
-        async with aiohttp.ClientSession() as client:
-            url = CONSTANTS.BASE_PATH_URL + CONSTANTS.PRIVATE_WS_DATA_PATH_URL
-            header = self._kucoin_auth.add_auth_to_params("POST", CONSTANTS.PRIVATE_WS_DATA_PATH_URL)
-            async with self._throttler.execute_task(CONSTANTS.PRIVATE_WS_DATA_PATH_URL):
-                async with client.post(url, headers=header) as response:
-                    response: aiohttp.ClientResponse = response
-                    if response.status != 200:
-                        raise IOError(f"Error fetching Kucoin user stream listen key. HTTP status is {response.status}.")
-                    data: Dict[str, str] = await response.json()
-                    return data
+        :return: the timestamp of the last received message in seconds
+        """
+        if self._ws_assistant:
+            return self._ws_assistant.last_recv_time
+        return 0
 
-    async def _subscribe_topic(self, ws: websockets.WebSocketClientProtocol) -> AsyncIterable[str]:
-        try:
-            for topic in KUCOIN_PRIVATE_TOPICS:
-                subscribe_request = {
-                    "id": int(time.time()),
-                    "type": "subscribe",
-                    "topic": topic,
-                    "privateChannel": True,
-                    "response": True}
-                async with self._throttler.execute_task(CONSTANTS.WS_REQUEST_LIMIT_ID):
-                    await ws.send(ujson.dumps(subscribe_request))
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            return
+    async def listen_for_user_stream(self, output: asyncio.Queue):
+        """
+        Connects to the user private channel in the exchange using a websocket connection. With the established
+        connection, listens to all balance events and order updates provided by the exchange and stores them in the
+        output queue
 
-    async def get_ws_connection(self) -> websockets.WebSocketClientProtocol:
-        stream_url: str = f"{self._current_endpoint}?token={self._current_listen_key}&acceptUserMessage=true"
-        self.logger().info(f"Connecting to {stream_url}.")
-
-        async with self._throttler.execute_task(CONSTANTS.WS_CONNECTION_LIMIT_ID):
-            return await websockets.connect(stream_url, ping_interval=40, ping_timeout=self.PING_TIMEOUT)
-
-    async def _inner_messages(self, ws: websockets.WebSocketClientProtocol) -> AsyncIterable[str]:
-        try:
-            while True:
-                msg: str = await ws.recv()
-                self._last_recv_time = time.time()
-                yield msg
-        finally:
-            await ws.close()
-            self._current_listen_key = None
-
-    async def listen_for_user_stream(self, ev_loop: asyncio.AbstractEventLoop, output: asyncio.Queue):
-        ws = None
+        :param output: The queue where all received events should be stored
+        """
+        ws: Optional[WSAssistant] = None
         while True:
             try:
-                if self._current_listen_key is None:
-                    creds = await self.get_listen_key()
-                    self._current_listen_key = creds["data"]["token"]
-                    self._current_endpoint = creds["data"]["instanceServers"][0]["endpoint"]
-                    self.logger().debug(f"Obtained listen key {self._current_listen_key}.")
+                connection_info = await web_utils.api_request(
+                    path=CONSTANTS.PRIVATE_WS_DATA_PATH_URL,
+                    api_factory=self._api_factory,
+                    throttler=self._throttler,
+                    domain=self._domain,
+                    method=RESTMethod.POST,
+                    is_auth_required=True,
+                )
 
-                    ws = await self.get_ws_connection()
-                    await self._subscribe_topic(ws)
-                    async for msg in self._inner_messages(ws):
-                        decoded: Dict[str, any] = ujson.loads(msg)
-                        output.put_nowait(decoded)
+                ws_url = connection_info["data"]["instanceServers"][0]["endpoint"]
+                ping_interval = int(int(connection_info["data"]["instanceServers"][0]["pingInterval"]) * 0.8 * 1e-3)
+                token = connection_info["data"]["token"]
+
+                ws = await self._get_ws_assistant()
+                await ws.connect(ws_url=f"{ws_url}?token={token}", message_timeout=ping_interval)
+                await ws.ping()  # to update last_recv_timestamp
+                await self._subscribe_channels(ws)
+                self._last_ws_message_sent_timestamp = self._time()
+
+                while True:
+                    try:
+                        seconds_until_next_ping = ping_interval - (self._time() - self._last_ws_message_sent_timestamp)
+                        await asyncio.wait_for(self._process_ws_messages(websocket_assistant=ws, output=output),
+                                               timeout=seconds_until_next_ping)
+                    except asyncio.TimeoutError:
+                        payload = {
+                            "id": web_utils.next_message_id(),
+                            "type": "ping",
+                        }
+                        ping_request = WSRequest(payload=payload)
+                        self._last_ws_message_sent_timestamp = self._time()
+                        await ws.send(request=ping_request)
 
             except asyncio.CancelledError:
                 raise
             except Exception:
-                self.logger().error("Unexpected error while maintaining the user event listen key. Retrying after "
-                                    "5 seconds...", exc_info=False)
-                self._current_listen_key = None
-                if ws is not None:
-                    await ws.close()
-                await asyncio.sleep(5)
+                self.logger().exception(
+                    "Unexpected error occurred when listening to user streams. Retrying in 5 seconds...")
+                await self._sleep(5.0)
             finally:
-                self._current_listen_key = None
-                if ws is not None:
-                    await ws.close()
+                ws and await ws.disconnect()
+
+    async def _subscribe_channels(self, ws: WSAssistant):
+        """
+        Subscribes to order events and balance events.
+
+        :param ws: the websocket assistant used to connect to the exchange
+        """
+        try:
+            orders_change_payload = {
+                "id": web_utils.next_message_id(),
+                "type": "subscribe",
+                "topic": "/spotMarket/tradeOrders",
+                "privateChannel": True,
+                "response": False,
+            }
+            subscribe_order_change_request: WSRequest = WSRequest(payload=orders_change_payload)
+
+            balance_payload = {
+                "id": web_utils.next_message_id(),
+                "type": "subscribe",
+                "topic": "/account/balance",
+                "privateChannel": True,
+                "response": False,
+            }
+            subscribe_balance_request: WSRequest = WSRequest(payload=balance_payload)
+
+            await ws.send(subscribe_order_change_request)
+            await ws.send(subscribe_balance_request)
+
+            self.logger().info("Subscribed to private order changes and balance updates channels...")
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            self.logger().exception("Unexpected error occurred subscribing to user streams...")
+            raise
+
+    async def _process_ws_messages(self, websocket_assistant: WSAssistant, output: asyncio.Queue):
+        async for ws_response in websocket_assistant.iter_messages():
+            data = ws_response.data
+            if (data.get("type") == "message"
+                    and data.get("subject") in [CONSTANTS.ORDER_CHANGE_EVENT_TYPE,
+                                                CONSTANTS.BALANCE_EVENT_TYPE]):
+                output.put_nowait(data)
+
+    async def _get_ws_assistant(self) -> WSAssistant:
+        if self._ws_assistant is None:
+            self._ws_assistant = await self._api_factory.get_ws_assistant()
+        return self._ws_assistant
+
+    def _time(self):
+        return time.time()

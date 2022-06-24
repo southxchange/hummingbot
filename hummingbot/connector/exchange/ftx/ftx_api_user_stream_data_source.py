@@ -1,5 +1,3 @@
-#!/usr/bin/env python
-
 import asyncio
 from decimal import Decimal
 import logging
@@ -48,7 +46,7 @@ class FtxAPIUserStreamDataSource(UserStreamTrackerDataSource):
         await ws.send(json.dumps({"op": "subscribe", "channel": "orders"}))
         await ws.send(json.dumps({"op": "subscribe", "channel": "fills"}))
 
-    async def listen_for_user_stream(self, ev_loop: asyncio.BaseEventLoop, output: asyncio.Queue):
+    async def listen_for_user_stream(self, output: asyncio.Queue):
         while True:
             try:
                 ws = await self.get_ws_connection()

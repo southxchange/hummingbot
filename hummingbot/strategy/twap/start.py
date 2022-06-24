@@ -29,15 +29,12 @@ def start(self):
         try:
             assets: Tuple[str, str] = self._initialize_market_assets(exchange, [raw_market_trading_pair])[0]
         except ValueError as e:
-            self._notify(str(e))
+            self.notify(str(e))
             return
 
         market_names: List[Tuple[str, List[str]]] = [(exchange, [raw_market_trading_pair])]
 
-        self._initialize_wallet(token_trading_pairs=list(set(assets)))
         self._initialize_markets(market_names)
-        self.assets = set(assets)
-
         maker_data = [self.markets[exchange], raw_market_trading_pair] + list(assets)
         self.market_trading_pair_tuples = [MarketTradingPairTuple(*maker_data)]
 
@@ -70,5 +67,5 @@ def start(self):
                                           execution_state=execution_state,
                                           cancel_order_wait_time=cancel_order_wait_time)
     except Exception as e:
-        self._notify(str(e))
+        self.notify(str(e))
         self.logger().error("Unknown error during initialization.", exc_info=True)
